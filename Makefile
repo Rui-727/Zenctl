@@ -4,6 +4,9 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -g
 PREFIX ?= /usr/local
 VERSION := $(shell git describe --abbrev=4 --dirty 2>/dev/null || echo 0.1.0)
 
+# `make` with no args builds both libzenctl.so and the zenctl binary.
+.DEFAULT_GOAL := all
+
 INCS = -Iinclude -Icli
 LIBS =
 
