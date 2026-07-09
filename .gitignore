@@ -1,0 +1,15 @@
+# Build artifacts
+*.o
+*.so
+*.so.*
+zenctl
+zenctl-test
+zenctl-smoke
+libzenctl_mockpreload.so
+zenctl.pc
+
+# Editor / OS noise
+*.swp
+*.swo
+*~
+.DS_Store
