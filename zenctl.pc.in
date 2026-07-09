@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: zenctl
+Description: Hardware control library for Linux
+Version: @VERSION@
+Libs: -L${libdir} -lzenctl
+Cflags: -I${includedir}

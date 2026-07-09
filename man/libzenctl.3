@@ -1,0 +1,421 @@
+.\" libzenctl.3 - manual page for libzenctl
+.\"
+.\" groff_man(7) source. View with: man -l man/libzenctl.3
+.TH LIBZENCTL 3 "2026-01-01" "libzenctl 0.1.0" "C Library Functions"
+.SH NAME
+libzenctl \- C library for hardware control on Linux
+.SH SYNOPSIS
+.nf
+.ft B
+#include <zenctl/zenctl.h>
+cc \-o myapp myapp.c \-lzenctl
+.ft R
+.fi
+.SH DESCRIPTION
+.B libzenctl
+is a C library that exposes every hardware control the Linux kernel
+exposes through one API. It is the real product; the
+.BR zenctl (1)
+CLI is a thin wrapper around it.
+.PP
+The library is library-first: no sysfs, procfs, ioctl, or ACPI access
+happens outside it. Callers link against
+.I libzenctl.so
+and either use the typed per-domain API (preferred for compiled code)
+or the generic key-value fallback (preferred for scripting and dynamic
+access).
+.PP
+Kernel interfaces are used in this priority order: sysfs, then procfs,
+then ioctl, then ACPI/WMI, then vendor-specific paths. Capability
+detection runs at context creation: every key is marked
+.BR available ,
+.BR unavailable ,
+or
+.BR readonly ,
+and calls degrade gracefully per feature. There is no hard kernel
+version floor.
+.SH API OVERVIEW
+.SS "Context"
+Every operation requires a context, allocated with
+.BR zenctl_ctx_new .
+The context owns the capability cache and the key-value router.
+.PP
+.in +4
+.EX
+zenctl_err_t err;
+zenctl_ctx_t *ctx = zenctl_ctx_new(&err);
+if (!ctx) { fprintf(stderr, "%s\\n", err.message); return 1; }
+/* ... use ctx ... */
+zenctl_ctx_free(ctx);
+.EE
+.in
+.SS "Error model"
+Every fallible call takes a
+.I zenctl_err_t *
+out-parameter. On failure the function returns \-1 and fills
+.IR err ;
+on success it returns 0 and leaves
+.I err
+untouched. Callers check
+.I err.code
+after every call.
+.PP
+.in +4
+.EX
+typedef struct {
+    int  code;
+    char message[256];
+    char context[256];
+    bool recoverable;
+} zenctl_err_t;
+.EE
+.in
+.PP
+.BR zenctl_strerror (3)
+returns a static string for any error code.
+.SS "Capability query"
+.BR zenctl_query_cap (3)
+returns one of
+.BR ZENCTL_CAP_AVAILABLE ,
+.BR ZENCTL_CAP_UNAVAILABLE ,
+or
+.BR ZENCTL_CAP_READONLY
+for any key the library knows about. Call it before using a feature
+so the caller can degrade or skip cleanly.
+.PP
+.in +4
+.EX
+zenctl_cap_t cap = zenctl_query_cap(ctx, "cpu.0.c_states");
+if (cap == ZENCTL_CAP_UNAVAILABLE) { /* skip */ }
+.EE
+.in
+.SS "CPU"
+Open a CPU by index, get and set its governor, frequency limits,
+online state, SMT, and C-states.
+.PP
+.in +4
+.EX
+zenctl_cpu_t *cpu = zenctl_cpu_open(0, &err);
+zenctl_cpu_set_governor(cpu, "performance", &err);
+int64_t max_hz;
+zenctl_cpu_get_freq_max(cpu, &max_hz, &err);
+zenctl_cpu_close(cpu);
+.EE
+.in
+.SS "Memory"
+Hugepages (default and per-size), THP, NUMA topology, and the
+/proc/sys/vm tunables (swappiness, overcommit, vfs_cache_pressure).
+.PP
+.in +4
+.EX
+zenctl_mem_set_nr_hugepages(1024, &err);
+zenctl_thp_mode_t thp;
+zenctl_mem_get_thp(&thp, &err);
+.EE
+.in
+.SS "Storage"
+Open a block device by name. Scheduler, queue depth, read-ahead,
+write cache, discard limits, rotational flag, I/O stats, runtime PM.
+.PP
+.in +4
+.EX
+zenctl_storage_t *st = zenctl_storage_open("sda", &err);
+zenctl_storage_set_scheduler(st, "mq-deadline", &err);
+zenctl_io_stats_t stats;
+zenctl_storage_get_io_stats(st, &stats, &err);
+zenctl_storage_close(st);
+.EE
+.in
+.SS "Network"
+Open a NIC by name. Ring sizes, offload flags (TSO/GRO/GSO/RXcsum/
+TXcsum), link info (speed/duplex/carrier/mtu), IRQ affinity.
+.PP
+.in +4
+.EX
+zenctl_net_t *net = zenctl_net_open("eth0", &err);
+zenctl_net_set_ring_rx(net, 4096, &err);
+zenctl_net_set_offload_tso(net, false, &err);
+zenctl_net_close(net);
+.EE
+.in
+.SS "GPU"
+Open a DRM card by index or device path. Driver and vendor strings,
+temperature, fan PWM, power draw, clock. AMDGPU-specific power
+profile and DPM state.
+.PP
+.in +4
+.EX
+zenctl_gpu_t *gpu = zenctl_gpu_open(0, &err);
+zenctl_gpu_set_fan_pwm(gpu, 128, &err);
+int64_t temp_mc;
+zenctl_gpu_get_temp(gpu, &temp_mc, &err);
+zenctl_gpu_close(gpu);
+.EE
+.in
+.SS "Thermal"
+Open a thermal zone by name. Temperature, type, policy, mode, trip
+points, cooling devices. Standalone hwmon sensor reads and fan
+control.
+.PP
+.in +4
+.EX
+zenctl_thermal_t *tz = zenctl_thermal_open("thermal_zone0", &err);
+int32_t temp;
+zenctl_thermal_get_temp(tz, &temp, &err);
+zenctl_thermal_set_policy(tz, "step_wise", &err);
+zenctl_thermal_close(tz);
+.EE
+.in
+.SS "Power"
+ACPI sleep states, mem_sleep mode, runtime PM for arbitrary devices,
+battery info, charge thresholds, AC adapter, wakeup devices.
+.PP
+.in +4
+.EX
+zenctl_power_set_mem_sleep_mode("deep", &err);
+zenctl_battery_t bat;
+zenctl_power_battery_get(0, &bat, &err);
+zenctl_power_battery_set_charge_end(0, 80, &err);
+.EE
+.in
+.SS "PCIe / IOMMU"
+Open by PCI address. Link speed and width (current and max), ASPM
+policy, runtime PM, D3cold, IOMMU group, NUMA node, vendor/device/class.
+.PP
+.in +4
+.EX
+zenctl_pcie_t *pc = zenctl_pcie_open("0000:01:00.0", &err);
+char *speed;
+zenctl_pcie_get_link_speed(pc, &speed, &err);
+free(speed);
+int group;
+zenctl_pcie_get_iommu_group(pc, &group, &err);
+zenctl_pcie_close(pc);
+.EE
+.in
+.SS "USB"
+Open a USB device by sysfs path (e.g. "1-2"). Device identification,
+runtime PM, autosuspend, authorized flag, wakeup, reset, enumerate.
+.PP
+.in +4
+.EX
+zenctl_usb_t *usb = zenctl_usb_open("1-2", &err);
+zenctl_usb_set_autosuspend_delay(usb, 2000, &err);
+zenctl_usb_reset(usb, &err);
+zenctl_usb_close(usb);
+.EE
+.in
+.SS "Bluetooth"
+Open an adapter by name (e.g. "hci0"). Powered state via rfkill
+soft-block, BD_ADDR via HCIGETDEVINFO, enumerate.
+.PP
+.in +4
+.EX
+zenctl_bt_t *bt = zenctl_bt_open("hci0", &err);
+zenctl_bt_set_powered(bt, false, &err);
+char *addr;
+zenctl_bt_get_address(bt, &addr, &err);
+free(addr);
+zenctl_bt_close(bt);
+.EE
+.in
+.SS "Wireless"
+Open a Wi-Fi PHY by name (e.g. "phy0"). Regulatory domain, TX power,
+802.11 power-save (setters return ENOTSUP in v1 pending nl80211),
+rfkill soft-block, enumerate.
+.PP
+.in +4
+.EX
+zenctl_wireless_t *wl = zenctl_wireless_open("phy0", &err);
+char *regd;
+zenctl_wireless_get_regdomain(wl, &regd, &err);
+free(regd);
+zenctl_wireless_close(wl);
+.EE
+.in
+.SS "Firmware"
+DMI/SMBIOS fields, EFI variables (efivarfs), ACPI tables, and
+firmware-attributes (BIOS) settings. EFI and BIOS writes require
+root.
+.PP
+.in +4
+.EX
+char *vendor;
+zenctl_fw_dmi_get("sys_vendor", &vendor, &err);
+free(vendor);
+
+uint8_t *data; size_t n;
+zenctl_fw_efi_get("BootOrder",
+    "8be4df61-93ca-11d2-aa0d-00e098032b8c",
+    &data, &n, &err);
+free(data);
+.EE
+.in
+.SS "Generic key-value API"
+For scripting, dynamic access, or keys not known at compile time.
+.TP
+.BI "int zenctl_get(zenctl_ctx_t *" ctx ", const char *" key ", zenctl_val_t *" out ", zenctl_err_t *" err ")"
+Fetch the value at
+.IR key .
+The caller owns
+.I out
+and must call
+.BR zenctl_val_free (3)
+on it.
+.TP
+.BI "int zenctl_set(zenctl_ctx_t *" ctx ", const char *" key ", const char *" value ", zenctl_err_t *" err ")"
+Set the value at
+.IR key .
+.I value
+is a string; the library converts per the key's type.
+.TP
+.BI "zenctl_key_iter_t *zenctl_keys(zenctl_ctx_t *" ctx ", const char *" prefix ", zenctl_err_t *" err ")"
+Iterate every key beginning with
+.IR prefix .
+Use
+.BR zenctl_key_iter_next (3)
+and
+.BR zenctl_key_iter_free (3).
+.PP
+.in +4
+.EX
+zenctl_val_t val;
+zenctl_get(ctx, "cpu.0.governor", &val, &err);
+printf("%s\\n", val.v.s);
+zenctl_val_free(&val);
+
+zenctl_set(ctx, "cpu.0.governor", "performance", &err);
+.EE
+.in
+.SH "ERROR MODEL"
+.SS "zenctl_err_t"
+Passed by pointer to every fallible function. On error
+.I code
+is set to one of the
+.B ZENCTL_ERR_*
+constants,
+.I message
+holds a short human-readable string,
+.I context
+holds the offending key or path when applicable, and
+.I recoverable
+is true when the caller can continue (e.g. capability missing).
+.SS "Error codes"
+.TP
+.B ZENCTL_OK
+Success. Always 0.
+.TP
+.B ZENCTL_ERR_EPERM
+Permission denied. Caller is not root for a write, or lacks
+CAP_SYS_ADMIN on a privileged read.
+.TP
+.B ZENCTL_ERR_ENOENT
+The key, device, or file does not exist.
+.TP
+.B ZENCTL_ERR_EINVAL
+The caller passed an invalid argument (bad range, bad enum, bad path
+shape).
+.TP
+.B ZENCTL_ERR_EIO
+A read or write to a sysfs, procfs, or efivarfs file failed.
+.TP
+.B ZENCTL_ERR_ENOTSUP
+The capability is unavailable on this kernel or hardware, or the
+operation requires a feature not built into the library (e.g. nl80211
+setters in v1).
+.TP
+.B ZENCTL_ERR_ERANGE
+A numeric write was outside the kernel-reported min/max.
+.TP
+.B ZENCTL_ERR_NOMEM
+Out of memory.
+.TP
+.B ZENCTL_ERR_INTERNAL
+An invariant was violated. File a bug.
+.SS "zenctl_strerror"
+.PP
+.in +4
+.EX
+const char *zenctl_strerror(int code);
+.EE
+.in
+.PP
+Returns a static string for any error code, including unknown codes.
+Safe to call with any int.
+.SH "CAPABILITY QUERY"
+.PP
+.in +4
+.EX
+zenctl_cap_t zenctl_query_cap(zenctl_ctx_t *ctx, const char *key);
+.EE
+.in
+.PP
+Returns the capability of the key at
+.IR key ,
+without touching hardware. Result is one of:
+.TP
+.B ZENCTL_CAP_UNAVAILABLE
+The kernel or hardware does not expose this control. Calls into the
+key return
+.BR ZENCTL_ERR_ENOTSUP .
+.TP
+.B ZENCTL_CAP_AVAILABLE
+The control is present and writable (subject to privilege).
+.TP
+.B ZENCTL_CAP_READONLY
+The control is present but read-only. Setters return
+.BR ZENCTL_ERR_EPERM .
+.PP
+Keys use dotted paths:
+.IR cpu.0.governor ,
+.IR storage.sda.scheduler ,
+.IR thermal.thermal_zone0.temp ,
+.IR gpu.0.fan_pwm ,
+etc. The exact set of keys is what
+.BR zenctl_keys (3)
+enumerates.
+.SH ENVIRONMENT
+.TP
+.B ZENCTL_SYSFS_PREFIX
+Override the sysfs root. Defaults to
+.IR /sys .
+Used by the unit test suite to point at a mocked sysfs tree.
+.SH FILES
+.TP
+.I /usr/local/lib/libzenctl.so
+The shared library. A symlink to
+.IR libzenctl.so.1 .
+.TP
+.I /usr/local/lib/libzenctl.so.1
+Soname symlink to the versioned library.
+.TP
+.I /usr/local/lib/libzenctl.so.1.0.0
+The versioned shared object.
+.TP
+.I /usr/local/include/zenctl/
+The public headers. Include
+.I zenctl/zenctl.h
+to get everything.
+.TP
+.I /usr/local/lib/pkgconfig/zenctl.pc
+pkg-config file. Use with
+.BR pkg-config (1):
+.sp
+.in +4
+.EX
+gcc $(pkg-config --cflags --libs zenctl) myapp.c
+.EE
+.in
+.SH "SEE ALSO"
+.BR zenctl (1),
+.BR pkg-config (1)
+.SH AUTHOR
+Rui-727
+.SH LICENSE
+GPL-2.0-or-later. See
+.I /usr/local/share/licenses/zenctl/LICENSE
+or
+.UR https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+the FSF GPL page
+.UE
+for the full text.

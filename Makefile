@@ -49,6 +49,14 @@ cli: zenctl
 # ── all ──
 all: lib cli
 
+# ── pkg-config ──
+zenctl.pc: zenctl.pc.in
+	sed -e 's|@PREFIX@|$(PREFIX)|g' \
+	    -e 's|@VERSION@|$(VERSION)|g' \
+	    zenctl.pc.in > zenctl.pc
+
+pkgconfig: zenctl.pc
+
 # ── test ──
 test: zenctl-test
 	LD_LIBRARY_PATH=. ./zenctl-test
@@ -57,28 +65,36 @@ zenctl-test: tests/unit/test_core.c libzenctl.so
 	$(CC) $(CFLAGS) $(INCS) -o zenctl-test tests/unit/test_core.c -L. -lzenctl $(LIBS)
 
 # ── install ──
-install: all
+install: all pkgconfig
 	install -d $(PREFIX)/lib
 	install -d $(PREFIX)/include/zenctl
 	install -d $(PREFIX)/bin
 	install -d $(PREFIX)/lib/pkgconfig
+	install -d $(PREFIX)/share/man/man1
+	install -d $(PREFIX)/share/man/man3
 	install -m 755 libzenctl.so.1.0.0 $(PREFIX)/lib/
 	ln -sf libzenctl.so.1.0.0 $(PREFIX)/lib/libzenctl.so.1
 	ln -sf libzenctl.so.1 $(PREFIX)/lib/libzenctl.so
 	install -m 644 include/zenctl/*.h $(PREFIX)/include/zenctl/
 	install -m 755 zenctl $(PREFIX)/bin/
+	install -m 644 zenctl.pc $(PREFIX)/lib/pkgconfig/
+	install -m 644 man/zenctl.1 $(PREFIX)/share/man/man1/
+	install -m 644 man/libzenctl.3 $(PREFIX)/share/man/man3/
 
 uninstall:
 	rm -f $(PREFIX)/lib/libzenctl.so*
 	rm -rf $(PREFIX)/include/zenctl
 	rm -f $(PREFIX)/bin/zenctl
+	rm -f $(PREFIX)/lib/pkgconfig/zenctl.pc
+	rm -f $(PREFIX)/share/man/man1/zenctl.1
+	rm -f $(PREFIX)/share/man/man3/libzenctl.3
 
 # ── clean ──
 clean:
-	rm -f $(LIB_OBJ) $(CLI_OBJ) libzenctl.so* zenctl zenctl-test
+	rm -f $(LIB_OBJ) $(CLI_OBJ) libzenctl.so* zenctl zenctl-test zenctl.pc
 
 # ── pattern rules ──
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
-.PHONY: all lib cli test install uninstall clean
+.PHONY: all lib cli test install uninstall clean pkgconfig
