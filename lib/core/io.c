@@ -6,6 +6,12 @@
  *    spaces; trailing newlines are tolerated but not required, so we do
  *    not add one)
  *  - consistent errno -> zenctl_err_t mapping
+ *
+ * Test redirection: if ZENCTL_SYSFS_PREFIX is set in the environment,
+ * any path starting with "/sys/" or "/proc/" is prefixed with it. This
+ * lets the unit tests point the library at a throwaway fixture tree
+ * (e.g. ZENCTL_SYSFS_PREFIX=/tmp/zenctl-mock) without touching the
+ * real kernel surface. The feature is a no-op in production.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +19,23 @@
 #include <errno.h>
 
 #include "zenctl/internal.h"
+
+/* Resolve a sysfs/procfs path against ZENCTL_SYSFS_PREFIX.
+ * Returns a pointer to either `path` (unchanged) or `buf` (rewritten
+ * as "<prefix><path>"). `buf` must be at least strlen(path)+256 bytes. */
+static const char *zenctl__resolve_path(const char *path,
+                                        char *buf, size_t bufsz)
+{
+    if (!path) return path;
+    const char *prefix = getenv("ZENCTL_SYSFS_PREFIX");
+    if (!prefix || !*prefix) return path;
+    if (strncmp(path, "/sys/", 5) == 0 || strncmp(path, "/proc/", 6) == 0) {
+        int n = snprintf(buf, bufsz, "%s%s", prefix, path);
+        if (n < 0 || (size_t)n >= bufsz) return path; /* overflow: fall back */
+        return buf;
+    }
+    return path;
+}
 
 void zenctl__set_err(zenctl_err_t *err, int code,
                      const char *msg, const char *ctx)
@@ -51,7 +74,10 @@ int zenctl__read_file_string(const char *path, char *buf, size_t bufsize,
         return -1;
     }
 
-    FILE *f = fopen(path, "r");
+    char rp[4096];
+    const char *rpath = zenctl__resolve_path(path, rp, sizeof(rp));
+
+    FILE *f = fopen(rpath, "r");
     if (!f) {
         zenctl__set_err(err, zenctl__errno_to_code(errno),
                         strerror(errno), path);
@@ -84,7 +110,10 @@ int zenctl__write_file_string(const char *path, const char *value,
         return -1;
     }
 
-    FILE *f = fopen(path, "w");
+    char rp[4096];
+    const char *rpath = zenctl__resolve_path(path, rp, sizeof(rp));
+
+    FILE *f = fopen(rpath, "w");
     if (!f) {
         zenctl__set_err(err, zenctl__errno_to_code(errno),
                         strerror(errno), path);

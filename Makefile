@@ -4,11 +4,10 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -g
 PREFIX ?= /usr/local
 VERSION := $(shell git describe --abbrev=4 --dirty 2>/dev/null || echo 0.1.0)
 
-INCS = -Iinclude
+INCS = -Iinclude -Icli
 LIBS =
 
-# ── libzenctl.so ──
-# Source files are added by each domain's implementation agent.
+# -- libzenctl.so --
 LIB_SRC = lib/core/core.c \
 	  lib/core/io.c \
 	  lib/cpu/cpu.c \
@@ -24,10 +23,7 @@ LIB_SRC = lib/core/core.c \
 	  lib/usb/usb.c \
 	  lib/usb/bt.c \
 	  lib/usb/wireless.c \
-	  lib/firmware/firmware.c \
-	  lib/gpu/gpu.c \
-	  lib/thermal/thermal.c \
-	  lib/power/power.c
+	  lib/firmware/firmware.c
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
 libzenctl.so: $(LIB_OBJ)
@@ -37,8 +33,24 @@ libzenctl.so: $(LIB_OBJ)
 
 lib: libzenctl.so
 
-# ── zenctl CLI ──
-CLI_SRC = cli/main.c
+# -- zenctl CLI --
+CLI_SRC = cli/main.c \
+	  cli/output.c \
+	  cli/cmd_util.c \
+	  cli/profile.c \
+	  cli/cmd/cpu.c \
+	  cli/cmd/mem.c \
+	  cli/cmd/storage.c \
+	  cli/cmd/net.c \
+	  cli/cmd/pcie.c \
+	  cli/cmd/gpu.c \
+	  cli/cmd/thermal.c \
+	  cli/cmd/power.c \
+	  cli/cmd/usb.c \
+	  cli/cmd/bt.c \
+	  cli/cmd/wireless.c \
+	  cli/cmd/firmware.c \
+	  cli/cmd/caps.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 
 zenctl: $(CLI_OBJ) libzenctl.so
@@ -46,10 +58,10 @@ zenctl: $(CLI_OBJ) libzenctl.so
 
 cli: zenctl
 
-# ── all ──
+# -- all --
 all: lib cli
 
-# ── pkg-config ──
+# -- pkg-config --
 zenctl.pc: zenctl.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
 	    -e 's|@VERSION@|$(VERSION)|g' \
@@ -57,14 +69,43 @@ zenctl.pc: zenctl.pc.in
 
 pkgconfig: zenctl.pc
 
-# ── test ──
+# -- test --
+#
+# zenctl-test is the aggregated unit-test binary. TAP-style output,
+# non-zero exit on any failure. libzenctl_mockpreload.so is an
+# LD_PRELOAD shim that redirects access/opendir/readlink/stat/open
+# on /sys/ and /proc/ paths to the ZENCTL_SYSFS_PREFIX fixture tree.
+# The shim is a no-op when ZENCTL_SYSFS_PREFIX is unset.
+
+TEST_SRC = tests/unit/test_main.c \
+	   tests/unit/mock_sysfs.c \
+	   tests/unit/test_cpu.c \
+	   tests/unit/test_mem.c \
+	   tests/unit/test_storage.c \
+	   tests/unit/test_thermal.c \
+	   tests/unit/test_net.c \
+	   tests/unit/test_power.c \
+	   tests/unit/test_pcie.c \
+	   tests/unit/test_usb.c \
+	   tests/unit/test_firmware.c
+
+zenctl-test: $(TEST_SRC) libzenctl.so libzenctl_mockpreload.so
+	$(CC) $(CFLAGS) $(INCS) -o zenctl-test $(TEST_SRC) -L. -lzenctl $(LIBS)
+
+libzenctl_mockpreload.so: tests/unit/mock_preload.c
+	$(CC) $(CFLAGS) -shared -fPIC -o $@ $< -ldl
+
 test: zenctl-test
-	LD_LIBRARY_PATH=. ./zenctl-test
+	LD_LIBRARY_PATH=. LD_PRELOAD=./libzenctl_mockpreload.so ./zenctl-test
 
-zenctl-test: tests/unit/test_core.c libzenctl.so
-	$(CC) $(CFLAGS) $(INCS) -o zenctl-test tests/unit/test_core.c -L. -lzenctl $(LIBS)
+# smoke: legacy test_core.c against the real /sys surface. Not part of `make test`.
+zenctl-smoke: tests/unit/test_core.c libzenctl.so
+	$(CC) $(CFLAGS) $(INCS) -o zenctl-smoke tests/unit/test_core.c -L. -lzenctl $(LIBS)
 
-# ── install ──
+smoke: zenctl-smoke
+	LD_LIBRARY_PATH=. ./zenctl-smoke
+
+# -- install --
 install: all pkgconfig
 	install -d $(PREFIX)/lib
 	install -d $(PREFIX)/include/zenctl
@@ -89,12 +130,13 @@ uninstall:
 	rm -f $(PREFIX)/share/man/man1/zenctl.1
 	rm -f $(PREFIX)/share/man/man3/libzenctl.3
 
-# ── clean ──
+# -- clean --
 clean:
-	rm -f $(LIB_OBJ) $(CLI_OBJ) libzenctl.so* zenctl zenctl-test zenctl.pc
+	rm -f $(LIB_OBJ) $(CLI_OBJ) libzenctl.so* zenctl zenctl-test \
+	      zenctl-smoke libzenctl_mockpreload.so zenctl.pc
 
-# ── pattern rules ──
+# -- pattern rules --
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $<
 
-.PHONY: all lib cli test install uninstall clean pkgconfig
+.PHONY: all lib cli test smoke install uninstall clean pkgconfig
