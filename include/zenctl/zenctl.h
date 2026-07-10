@@ -39,6 +39,11 @@ typedef struct {
 
 const char *zenctl_strerror(int code);
 
+/* Returns the library version as a "MAJOR.MINOR.PATCH" string
+ * (e.g. "0.1.0"). The string is static and valid for the lifetime
+ * of the process. */
+const char *zenctl_version(void);
+
 /* ── Capability ──────────────────────────────────────────────────── */
 
 typedef enum {

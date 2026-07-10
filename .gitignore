@@ -2,11 +2,16 @@
 *.o
 *.so
 *.so.*
-zenctl
-zenctl-test
-zenctl-smoke
-libzenctl_mockpreload.so
-zenctl.pc
+/zenctl
+/zenctl-test
+/zenctl-smoke
+/libzenctl_mockpreload.so
+/zenctl.pc
+
+# Coverage artifacts (gcov)
+*.gcda
+*.gcno
+*.gcov
 
 # Editor / OS noise
 *.swp
