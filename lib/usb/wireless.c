@@ -1,10 +1,16 @@
 /* wireless.c - Wireless (Wi-Fi / cfg80211 / nl80211) domain implementation.
  *
- * For v1 the only knobs we actually implement end-to-end are rfkill
- * soft-block (power) and basic enumeration. The nl80211-dependent
- * controls — regdomain set, TX power, 802.11 power-save — are stubbed
- * to ZENCTL_ERR_ENOTSUP. The TODOs are tracked in
- * docs/KERNEL_USB_BT_FW.md section 3.
+ * The knobs we implement:
+ *   - rfkill soft-block (power)      via /sys/class/rfkill
+ *   - regdomain get/set              via nl80211 (NL80211_CMD_GET_REG /
+ *                                     NL80211_CMD_REQ_SET_REG)
+ *   - TX power get/set               via nl80211 (NL80211_CMD_GET_WIPHY /
+ *                                     NL80211_CMD_SET_WIPHY)
+ *   - power save set                 via nl80211 (NL80211_CMD_SET_POWER_SAVE)
+ *   - power save get                 ENOTSUP (no GET_POWER_SAVE in nl80211)
+ *
+ * nl80211 is the genetlink-based replacement for wireless extensions.
+ * See docs/KERNEL_USB_BT_FW.md section 3.2.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -21,6 +27,7 @@
 #include "zenctl/internal.h"
 #include "zenctl/wireless.h"
 
+#include "nl80211.h"
 #include "rfkill.h"
 #include "util.h"
 
@@ -93,14 +100,29 @@ void zenctl_wireless_close(zenctl_wireless_t *wl)
 
 int zenctl_wireless_get_regdomain(zenctl_wireless_t *wl, char **out, zenctl_err_t *err)
 {
-    (void)wl; (void)out;
-    /* The current regdomain is only exposed via nl80211
-     * (NL80211_CMD_GET_REG). /sys/class/regulatory/ contains hint
-     * subdirs, not the live value. */
-    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "regdomain read requires nl80211 (TODO)",
-                    "zenctl_wireless_get_regdomain");
-    return -1;
+    if (!wl || !out) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL wl or out",
+                        "zenctl_wireless_get_regdomain");
+        return -1;
+    }
+    *out = NULL;
+    /* The regdomain is system-global; nl80211 reports it via
+     * NL80211_CMD_GET_REG (the alpha2 attribute is in the first
+     * NEW_REG_RULE message of the reply). */
+    char alpha2[4] = {0};
+    if (nl80211_get_regdomain(alpha2, sizeof(alpha2)) != 0) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), "zenctl_wireless_get_regdomain");
+        return -1;
+    }
+    char *dup = strdup(alpha2);
+    if (!dup) {
+        zenctl__set_err(err, ZENCTL_ERR_NOMEM, "strdup failed",
+                        "zenctl_wireless_get_regdomain");
+        return -1;
+    }
+    *out = dup;
+    return 0;
 }
 
 int zenctl_wireless_set_regdomain(zenctl_wireless_t *wl, const char *country, zenctl_err_t *err)
@@ -114,47 +136,85 @@ int zenctl_wireless_set_regdomain(zenctl_wireless_t *wl, const char *country, ze
                         "zenctl_wireless_set_regdomain");
         return -1;
     }
-    /* Requires NL80211_CMD_REQ_SET_REG. */
-    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "regdomain set requires nl80211 (TODO)",
-                    "zenctl_wireless_set_regdomain");
-    return -1;
+    /* NL80211_CMD_REQ_SET_REG is system-global (not per-phy), but the
+     * phy handle is required by the typed API for symmetry. The
+     * regdomain applies to every phy on the system. */
+    if (nl80211_set_regdomain(country) != 0) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), "zenctl_wireless_set_regdomain");
+        return -1;
+    }
+    return 0;
 }
 
 int zenctl_wireless_get_txpower(zenctl_wireless_t *wl, int32_t *out_mBm, zenctl_err_t *err)
 {
-    (void)wl; (void)out_mBm;
-    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "txpower read requires nl80211 (TODO)",
-                    "zenctl_wireless_get_txpower");
-    return -1;
+    if (!wl || !out_mBm) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL wl or out_mBm",
+                        "zenctl_wireless_get_txpower");
+        return -1;
+    }
+    if (nl80211_get_txpower(wl->index, out_mBm) != 0) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), "zenctl_wireless_get_txpower");
+        return -1;
+    }
+    return 0;
 }
 
 int zenctl_wireless_set_txpower(zenctl_wireless_t *wl, int32_t mBm, zenctl_err_t *err)
 {
-    (void)wl; (void)mBm;
-    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "txpower set requires nl80211 (TODO)",
-                    "zenctl_wireless_set_txpower");
-    return -1;
+    if (!wl) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL wl",
+                        "zenctl_wireless_set_txpower");
+        return -1;
+    }
+    /* mBm == -1 means "automatic" (driver picks). Any other value is
+     * treated as a fixed TX power in mBm (100 * dBm). 0 mBm is a
+     * valid (if unusual) value and is not treated as an error. */
+    if (nl80211_set_txpower(wl->index, mBm) != 0) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), "zenctl_wireless_set_txpower");
+        return -1;
+    }
+    return 0;
 }
 
 int zenctl_wireless_get_power_save(zenctl_wireless_t *wl, bool *out, zenctl_err_t *err)
 {
     (void)wl; (void)out;
+    /* nl80211 has no NL80211_CMD_GET_POWER_SAVE; reading the current
+     * 802.11 PS state requires parsing `iw dev <iface> info` output
+     * (fragile) or debugfs. Return ENOTSUP so callers can fall back
+     * gracefully. */
     zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "power_save read requires nl80211 (TODO)",
+                    "power_save read not supported by nl80211",
                     "zenctl_wireless_get_power_save");
     return -1;
 }
 
 int zenctl_wireless_set_power_save(zenctl_wireless_t *wl, bool on, zenctl_err_t *err)
 {
-    (void)wl; (void)on;
-    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
-                    "power_save set requires nl80211 (TODO)",
-                    "zenctl_wireless_set_power_save");
-    return -1;
+    if (!wl) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL wl",
+                        "zenctl_wireless_set_power_save");
+        return -1;
+    }
+    /* 802.11 power save is per-interface, not per-phy. Resolve the
+     * first interface bound to this phy and apply PS to it. */
+    int ifindex = nl80211_phy_to_ifindex(wl->phy);
+    if (ifindex < 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ENOENT,
+                        "no wireless interface bound to this phy",
+                        "zenctl_wireless_set_power_save");
+        return -1;
+    }
+    if (nl80211_set_power_save(ifindex, on) != 0) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), "zenctl_wireless_set_power_save");
+        return -1;
+    }
+    return 0;
 }
 
 int zenctl_wireless_get_rfkill_blocked(zenctl_wireless_t *wl, bool *out, zenctl_err_t *err)
