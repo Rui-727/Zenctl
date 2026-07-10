@@ -4,29 +4,49 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -g
 PREFIX ?= /usr/local
 VERSION := $(shell git describe --abbrev=4 --dirty 2>/dev/null || echo 0.1.0)
 
+# Optional Bluetooth development headers. When libbluetooth-dev is
+# installed, bt_mgmt.c uses the system <bluetooth/hci.h>; otherwise it
+# falls back to local definitions of the kernel ABI. The build
+# succeeds either way.
+HAVE_BLUETOOTH := $(shell printf '#include <bluetooth/hci.h>\n' | \
+    $(CC) -E -x c - >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(HAVE_BLUETOOTH),1)
+CFLAGS += -DHAVE_BLUETOOTH
+endif
+
 # `make` with no args builds both libzenctl.so and the zenctl binary.
 .DEFAULT_GOAL := all
 
 INCS = -Iinclude -Icli
-LIBS =
+
+# -ldl: dlopen() for NVML (lib/gpu/nvml.c) and the mock preload shim.
+LIBS = -ldl
 
 # -- libzenctl.so --
-LIB_SRC = lib/core/core.c \
-	  lib/core/io.c \
-	  lib/cpu/cpu.c \
-	  lib/mem/mem.c \
-	  lib/storage/storage.c \
-	  lib/net/net.c \
-	  lib/pcie/pcie.c \
-	  lib/gpu/gpu.c \
-	  lib/thermal/thermal.c \
-	  lib/power/power.c \
-	  lib/usb/util.c \
-	  lib/usb/rfkill.c \
-	  lib/usb/usb.c \
-	  lib/usb/bt.c \
-	  lib/usb/wireless.c \
-	  lib/firmware/firmware.c
+# $(wildcard) makes the build resilient to in-flight source files
+# owned by other agents (e.g. nl80211.c): if a file is temporarily
+# absent, it is silently skipped instead of breaking the build.
+LIB_SRC = $(wildcard \
+          lib/core/core.c \
+          lib/core/io.c \
+          lib/cpu/cpu.c \
+          lib/mem/mem.c \
+          lib/storage/storage.c \
+          lib/net/net.c \
+          lib/pcie/pcie.c \
+          lib/gpu/gpu.c \
+          lib/gpu/nvml.c \
+          lib/thermal/thermal.c \
+          lib/power/power.c \
+          lib/usb/util.c \
+          lib/usb/rfkill.c \
+          lib/usb/nl80211.c \
+          lib/usb/usb.c \
+          lib/usb/bt.c \
+          lib/usb/bt_mgmt.c \
+          lib/usb/wireless.c \
+          lib/firmware/firmware.c \
+          )
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
 libzenctl.so: $(LIB_OBJ)
@@ -90,6 +110,8 @@ TEST_SRC = tests/unit/test_main.c \
 	   tests/unit/test_power.c \
 	   tests/unit/test_pcie.c \
 	   tests/unit/test_usb.c \
+	   tests/unit/test_nvml.c \
+	   tests/unit/test_bt_mgmt.c \
 	   tests/unit/test_firmware.c
 
 zenctl-test: $(TEST_SRC) libzenctl.so libzenctl_mockpreload.so

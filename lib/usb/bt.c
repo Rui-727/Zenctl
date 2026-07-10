@@ -1,10 +1,11 @@
 /* bt.c - Bluetooth domain implementation.
  *
- * Power control uses the rfkill soft-block interface; the adapter
- * address is read via the HCIGETDEVINFO ioctl on a raw HCI socket.
- * The kernel mgmt-socket path (MGMT_OP_SET_POWERED) is documented in
- * docs/KERNEL_USB_BT_FW.md section 2.5 but not implemented here; the
- * rfkill path is sufficient for power on/off on all current drivers.
+ * Power control uses the HCI socket ioctls (HCIDEVUP / HCIDEVDOWN /
+ * HCIGETDEVINFO) via lib/usb/bt_mgmt.c as the primary path, with
+ * rfkill soft-block as a fallback when the HCI ioctls fail (e.g.
+ * EPERM on a system where the user lacks CAP_NET_ADMIN but can write
+ * /sys/class/rfkill/rfkillN/soft). The adapter address is read via
+ * the HCIGETDEVINFO ioctl on a raw HCI socket.
  *
  * Because Bluetooth development headers (<net/bluetooth/hci.h>) may
  * not be installed on every build host, the HCI protocol constants
@@ -31,6 +32,7 @@
 
 #include "rfkill.h"
 #include "util.h"
+#include "bt_mgmt.h"
 
 #define BT_SYSFS_BASE "/sys/class/bluetooth"
 
@@ -175,6 +177,30 @@ int zenctl_bt_get_powered(zenctl_bt_t *bt, bool *out, zenctl_err_t *err)
         zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL bt or out", "zenctl_bt_get_powered");
         return -1;
     }
+    /* Primary path: HCI socket HCIGETDEVINFO. The "powered" state is
+     * the HCI_UP flag in struct hci_dev_info.flags. */
+    int fd = bt_mgmt_open();
+    if (fd >= 0) {
+        int rc = bt_mgmt_get_powered(fd, bt->index);
+        int saved_errno = errno;
+        close(fd);
+        if (rc >= 0) {
+            *out = (rc == 1);
+            return 0;
+        }
+        /* Fall through to rfkill on EPERM / ENOENT / ENODEV (adapter
+         * exists in sysfs but not registered with HCI core, or the
+         * user lacks CAP_NET_ADMIN). Other errors (EBADF, EINVAL)
+         * mean the caller passed bad arguments; surface them. */
+        if (saved_errno != EPERM && saved_errno != EACCES &&
+            saved_errno != ENOENT && saved_errno != ENODEV) {
+            zenctl__set_err(err, zenctl__errno_to_code(saved_errno),
+                            strerror(saved_errno),
+                            "bt_mgmt_get_powered");
+            return -1;
+        }
+    }
+    /* Fallback: rfkill soft-block. powered = !soft_blocked. */
     bool blocked = false;
     int rc = zenctl_bt_get_rfkill_blocked(bt, &blocked, err);
     if (rc != 0) return rc;
@@ -188,6 +214,22 @@ int zenctl_bt_set_powered(zenctl_bt_t *bt, bool on, zenctl_err_t *err)
         zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL bt", "zenctl_bt_set_powered");
         return -1;
     }
+    /* Primary path: HCIDEVUP / HCIDEVDOWN. */
+    int fd = bt_mgmt_open();
+    if (fd >= 0) {
+        int rc = bt_mgmt_set_powered(fd, bt->index, on);
+        int saved_errno = errno;
+        close(fd);
+        if (rc == 0) return 0;
+        /* EPERM/EACCES: caller lacks CAP_NET_ADMIN, try rfkill. */
+        if (saved_errno != EPERM && saved_errno != EACCES) {
+            zenctl__set_err(err, zenctl__errno_to_code(saved_errno),
+                            strerror(saved_errno),
+                            "bt_mgmt_set_powered");
+            return -1;
+        }
+    }
+    /* Fallback: rfkill soft-block. powered=true -> soft=0. */
     return zenctl_bt_set_rfkill_blocked(bt, !on, err);
 }
 

@@ -1,8 +1,8 @@
 /* gpu.c - GPU domain implementation
  *
  * Backed by DRM sysfs and hwmon. v1 covers the common surface plus
- * AMDGPU-specific controls. NVML (NVIDIA) and i915-specific paths are
- * left as TODOs.
+ * AMDGPU-specific controls, NVML-backed NVIDIA controls (dlopen'd at
+ * runtime via lib/gpu/nvml.c), and Intel i915 RPS / RC6 controls.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +17,7 @@
 
 #include "zenctl/internal.h"
 #include "zenctl/gpu.h"
+#include "nvml.h"
 
 
 /* Path construction uses snprintf with PATH_MAX-sized buffers.
@@ -287,6 +288,46 @@ static int gpu_amdgpu_check(zenctl_gpu_t *gpu, zenctl_err_t *err)
     return 0;
 }
 
+/* True if the GPU is backed by the NVIDIA proprietary driver. We
+ * accept either PCI vendor 0x10de ("NVIDIA") or driver name "nvidia"
+ * (the proprietary /-open kernel module). nouveau and nv are not
+ * NVML-backed and fall through to the sysfs/hwmon path. */
+static bool gpu_is_nvidia(zenctl_gpu_t *gpu)
+{
+    if (!gpu) return false;
+    if (gpu->vendor && strcmp(gpu->vendor, "NVIDIA") == 0) return true;
+    if (gpu->driver && strcmp(gpu->driver, "nvidia") == 0) return true;
+    return false;
+}
+
+/* Surface a uniform "NVML not available" error. */
+static int nvml_unavailable(zenctl_err_t *err, const char *caller)
+{
+    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                    "NVML (libnvidia-ml.so.1) not available",
+                    caller);
+    return -1;
+}
+
+/* Common i915-driver guard for the i915_* entry points. */
+static int gpu_i915_check(zenctl_gpu_t *gpu, zenctl_err_t *err)
+{
+    if (!gpu || !gpu->driver) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "gpu handle invalid",
+                        "gpu_i915_check");
+        return -1;
+    }
+    if (strcmp(gpu->driver, "i915") != 0) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx),
+                 "i915-specific op on driver=%s", gpu->driver);
+        zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                        "operation only supported on i915", ctx);
+        return -1;
+    }
+    return 0;
+}
+
 /* ── Driver / vendor ─────────────────────────────────────────────── */
 
 int zenctl_gpu_get_driver(zenctl_gpu_t *gpu, char **out, zenctl_err_t *err)
@@ -332,11 +373,32 @@ int zenctl_gpu_get_temp(zenctl_gpu_t *gpu, int64_t *out_millideg, zenctl_err_t *
                         "zenctl_gpu_get_temp");
         return -1;
     }
-    const char *hw = gpu_hwmon(gpu, err);
-    if (!hw) return -1;
-    char path[8192];
-    snprintf(path, sizeof(path), "%s/temp1_input", hw);
-    return zenctl__read_file_i64(path, out_millideg, err);
+    /* Try hwmon first. Pass NULL err so we can fall through to NVML
+     * without surfacing a half-written error. */
+    const char *hw = gpu_hwmon(gpu, NULL);
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/temp1_input", hw);
+        if (zenctl__read_file_i64(path, out_millideg, NULL) == 0)
+            return 0;
+    }
+    /* NVIDIA fallback via NVML. */
+    if (gpu_is_nvidia(gpu)) {
+        if (nvml_init() == 0 && nvml_get_temp(gpu->card_index, out_millideg) == 0)
+            return 0;
+        return nvml_unavailable(err, "zenctl_gpu_get_temp");
+    }
+    /* Re-run the hwmon read with err so the caller sees the real
+     * failure (ENOENT / EIO / etc.) rather than a generic ENOTSUP. */
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/temp1_input", hw);
+        return zenctl__read_file_i64(path, out_millideg, err);
+    }
+    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                    "no hwmon and not an NVIDIA GPU",
+                    "zenctl_gpu_get_temp");
+    return -1;
 }
 
 /* ── Fan control ─────────────────────────────────────────────────── */
@@ -348,14 +410,39 @@ int zenctl_gpu_get_fan_pwm(zenctl_gpu_t *gpu, int *out, zenctl_err_t *err)
                         "zenctl_gpu_get_fan_pwm");
         return -1;
     }
-    const char *hw = gpu_hwmon(gpu, err);
-    if (!hw) return -1;
-    char path[8192];
-    snprintf(path, sizeof(path), "%s/pwm1", hw);
-    int64_t v = 0;
-    if (zenctl__read_file_i64(path, &v, err) != 0) return -1;
-    *out = (int)v;
-    return 0;
+    const char *hw = gpu_hwmon(gpu, NULL);
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/pwm1", hw);
+        int64_t v = 0;
+        if (zenctl__read_file_i64(path, &v, NULL) == 0) {
+            *out = (int)v;
+            return 0;
+        }
+    }
+    /* NVIDIA fallback: NVML reports percent 0-100, convert to PWM 0-255. */
+    if (gpu_is_nvidia(gpu)) {
+        int percent = 0;
+        if (nvml_init() == 0 && nvml_get_fan_speed(gpu->card_index, &percent) == 0) {
+            if (percent < 0) percent = 0;
+            if (percent > 100) percent = 100;
+            *out = (percent * 255 + 50) / 100;  /* round to nearest */
+            return 0;
+        }
+        return nvml_unavailable(err, "zenctl_gpu_get_fan_pwm");
+    }
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/pwm1", hw);
+        int64_t v = 0;
+        if (zenctl__read_file_i64(path, &v, err) != 0) return -1;
+        *out = (int)v;
+        return 0;
+    }
+    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                    "no hwmon and not an NVIDIA GPU",
+                    "zenctl_gpu_get_fan_pwm");
+    return -1;
 }
 
 int zenctl_gpu_set_fan_pwm(zenctl_gpu_t *gpu, int pwm, zenctl_err_t *err)
@@ -418,15 +505,36 @@ int zenctl_gpu_get_power(zenctl_gpu_t *gpu, int64_t *out_microwatts, zenctl_err_
                         "zenctl_gpu_get_power");
         return -1;
     }
-    const char *hw = gpu_hwmon(gpu, err);
-    if (!hw) return -1;
-    /* amdgpu exports power1_average; some other drivers export power1_input. */
-    char path[8192];
-    snprintf(path, sizeof(path), "%s/power1_average", hw);
-    if (zenctl__read_file_i64(path, out_microwatts, NULL) == 0)
-        return 0;
-    snprintf(path, sizeof(path), "%s/power1_input", hw);
-    return zenctl__read_file_i64(path, out_microwatts, err);
+    const char *hw = gpu_hwmon(gpu, NULL);
+    if (hw) {
+        /* amdgpu exports power1_average; some drivers export power1_input. */
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/power1_average", hw);
+        if (zenctl__read_file_i64(path, out_microwatts, NULL) == 0)
+            return 0;
+        snprintf(path, sizeof(path), "%s/power1_input", hw);
+        if (zenctl__read_file_i64(path, out_microwatts, NULL) == 0)
+            return 0;
+    }
+    /* NVIDIA fallback via NVML (NVML returns microwatts already). */
+    if (gpu_is_nvidia(gpu)) {
+        if (nvml_init() == 0 && nvml_get_power(gpu->card_index, out_microwatts) == 0)
+            return 0;
+        return nvml_unavailable(err, "zenctl_gpu_get_power");
+    }
+    /* Re-surface the hwmon error. */
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/power1_average", hw);
+        if (zenctl__read_file_i64(path, out_microwatts, NULL) == 0)
+            return 0;
+        snprintf(path, sizeof(path), "%s/power1_input", hw);
+        return zenctl__read_file_i64(path, out_microwatts, err);
+    }
+    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                    "no hwmon and not an NVIDIA GPU",
+                    "zenctl_gpu_get_power");
+    return -1;
 }
 
 /* ── Frequency ───────────────────────────────────────────────────── */
@@ -438,18 +546,40 @@ int zenctl_gpu_get_freq(zenctl_gpu_t *gpu, int64_t *out_mhz, zenctl_err_t *err)
                         "zenctl_gpu_get_freq");
         return -1;
     }
-    const char *hw = gpu_hwmon(gpu, err);
-    if (!hw) return -1;
-    char path[8192];
-    snprintf(path, sizeof(path), "%s/freq1_input", hw);
-    int64_t v = 0;
-    if (zenctl__read_file_i64(path, &v, err) != 0) return -1;
-    /* AMDGPU exports freq1_input in kHz per the kernel ABI; some drivers
-     * report Hz. Heuristic: values > 100000 are kHz (since 100 GHz in kHz
-     * is 1e8, unreachable). Divide to MHz. */
-    if (v > 100000) v /= 1000;
-    *out_mhz = v;
-    return 0;
+    const char *hw = gpu_hwmon(gpu, NULL);
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/freq1_input", hw);
+        int64_t v = 0;
+        if (zenctl__read_file_i64(path, &v, NULL) == 0) {
+            /* AMDGPU exports freq1_input in kHz per the kernel ABI;
+             * some drivers report Hz. Heuristic: values > 100000 are
+             * kHz (since 100 GHz in kHz is 1e8, unreachable). Divide
+             * to MHz. */
+            if (v > 100000) v /= 1000;
+            *out_mhz = v;
+            return 0;
+        }
+    }
+    /* NVIDIA fallback: NVML returns SM clock in MHz directly. */
+    if (gpu_is_nvidia(gpu)) {
+        if (nvml_init() == 0 && nvml_get_clock(gpu->card_index, out_mhz) == 0)
+            return 0;
+        return nvml_unavailable(err, "zenctl_gpu_get_freq");
+    }
+    if (hw) {
+        char path[8192];
+        snprintf(path, sizeof(path), "%s/freq1_input", hw);
+        int64_t v = 0;
+        if (zenctl__read_file_i64(path, &v, err) != 0) return -1;
+        if (v > 100000) v /= 1000;
+        *out_mhz = v;
+        return 0;
+    }
+    zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                    "no hwmon and not an NVIDIA GPU",
+                    "zenctl_gpu_get_freq");
+    return -1;
 }
 
 /* ── AMDGPU-specific ─────────────────────────────────────────────── */
@@ -607,4 +737,255 @@ int zenctl_gpu_amdgpu_get_busy_percent(zenctl_gpu_t *gpu, int *out, zenctl_err_t
     }
     *out = (int)v;
     return 0;
+}
+
+/* ── NVIDIA-specific (NVML) ──────────────────────────────────────── */
+
+int zenctl_gpu_nvidia_get_utilization(zenctl_gpu_t *gpu, int *out_percent, zenctl_err_t *err)
+{
+    if (!gpu || !out_percent) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_nvidia_get_utilization");
+        return -1;
+    }
+    if (!gpu_is_nvidia(gpu)) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx),
+                 "nvidia-specific op on driver=%s vendor=%s",
+                 gpu->driver ? gpu->driver : "(null)",
+                 gpu->vendor ? gpu->vendor : "(null)");
+        zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                        "operation only supported on NVIDIA GPUs", ctx);
+        return -1;
+    }
+    if (nvml_init() != 0)
+        return nvml_unavailable(err, "zenctl_gpu_nvidia_get_utilization");
+    int pct = 0;
+    if (nvml_get_utilization(gpu->card_index, &pct) != 0)
+        return nvml_unavailable(err, "zenctl_gpu_nvidia_get_utilization");
+    *out_percent = pct;
+    return 0;
+}
+
+int zenctl_gpu_nvidia_get_power_limit(zenctl_gpu_t *gpu, int32_t *out_mw, zenctl_err_t *err)
+{
+    if (!gpu || !out_mw) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_nvidia_get_power_limit");
+        return -1;
+    }
+    if (!gpu_is_nvidia(gpu)) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx),
+                 "nvidia-specific op on driver=%s vendor=%s",
+                 gpu->driver ? gpu->driver : "(null)",
+                 gpu->vendor ? gpu->vendor : "(null)");
+        zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                        "operation only supported on NVIDIA GPUs", ctx);
+        return -1;
+    }
+    if (nvml_init() != 0)
+        return nvml_unavailable(err, "zenctl_gpu_nvidia_get_power_limit");
+    int32_t mw = 0;
+    if (nvml_get_power_limit(gpu->card_index, &mw) != 0)
+        return nvml_unavailable(err, "zenctl_gpu_nvidia_get_power_limit");
+    *out_mw = mw;
+    return 0;
+}
+
+int zenctl_gpu_nvidia_set_power_limit(zenctl_gpu_t *gpu, int32_t mw, zenctl_err_t *err)
+{
+    if (!gpu) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu",
+                        "zenctl_gpu_nvidia_set_power_limit");
+        return -1;
+    }
+    if (mw < 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ERANGE,
+                        "power limit must be >= 0",
+                        "zenctl_gpu_nvidia_set_power_limit");
+        return -1;
+    }
+    if (!gpu_is_nvidia(gpu)) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx),
+                 "nvidia-specific op on driver=%s vendor=%s",
+                 gpu->driver ? gpu->driver : "(null)",
+                 gpu->vendor ? gpu->vendor : "(null)");
+        zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                        "operation only supported on NVIDIA GPUs", ctx);
+        return -1;
+    }
+    if (nvml_init() != 0)
+        return nvml_unavailable(err, "zenctl_gpu_nvidia_set_power_limit");
+    if (nvml_set_power_limit(gpu->card_index, mw) != 0) {
+        zenctl__set_err(err, ZENCTL_ERR_EIO,
+                        "nvmlDeviceSetPowerManagementLimit failed",
+                        "zenctl_gpu_nvidia_set_power_limit");
+        return -1;
+    }
+    return 0;
+}
+
+/* ── Intel i915-specific (RPS / RC6) ─────────────────────────────── */
+/*
+ * The i915 driver exposes RC6 (render standby) and RPS (Render
+ * Performance Steering, GPU frequency scaling) controls via sysfs
+ * files under /sys/class/drm/cardN/device/. Frequencies are in MHz.
+ *
+ *   rc6_enable     - 0/1, RW
+ *   rps_min_freq   - MHz, RW
+ *   rps_max_freq   - MHz, RW
+ *   rps_cur_freq   - MHz, RO
+ *   rps_boost_freq - MHz, RW
+ *
+ * These only exist when driver == i915. The newer "xe" driver uses
+ * a different surface and is not handled here.
+ */
+
+/* Helper: read an i915 RPS/RC6 sysfs attribute as an int. */
+static int i915_read_attr(zenctl_gpu_t *gpu, const char *name,
+                          int64_t *out, zenctl_err_t *err)
+{
+    char path[8192];
+    snprintf(path, sizeof(path), "%s/%s", gpu->device_path, name);
+    return zenctl__read_file_i64(path, out, err);
+}
+
+/* Helper: write an i915 RPS/RC6 sysfs attribute as an int. */
+static int i915_write_attr(zenctl_gpu_t *gpu, const char *name,
+                           int64_t val, zenctl_err_t *err)
+{
+    char path[8192];
+    snprintf(path, sizeof(path), "%s/%s", gpu->device_path, name);
+    return zenctl__write_file_i64(path, val, err);
+}
+
+int zenctl_gpu_i915_get_rc6(zenctl_gpu_t *gpu, bool *out, zenctl_err_t *err)
+{
+    if (!gpu || !out) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_i915_get_rc6");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    int64_t v = 0;
+    if (i915_read_attr(gpu, "rc6_enable", &v, err) != 0) return -1;
+    *out = (v != 0);
+    return 0;
+}
+
+int zenctl_gpu_i915_set_rc6(zenctl_gpu_t *gpu, bool on, zenctl_err_t *err)
+{
+    if (!gpu) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu",
+                        "zenctl_gpu_i915_set_rc6");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    return i915_write_attr(gpu, "rc6_enable", on ? 1 : 0, err);
+}
+
+int zenctl_gpu_i915_get_rps_min(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
+{
+    if (!gpu || !out_mhz) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_i915_get_rps_min");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    int64_t v = 0;
+    if (i915_read_attr(gpu, "rps_min_freq", &v, err) != 0) return -1;
+    *out_mhz = (int)v;
+    return 0;
+}
+
+int zenctl_gpu_i915_set_rps_min(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
+{
+    if (!gpu) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu",
+                        "zenctl_gpu_i915_set_rps_min");
+        return -1;
+    }
+    if (mhz < 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ERANGE, "frequency must be >= 0",
+                        "zenctl_gpu_i915_set_rps_min");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    return i915_write_attr(gpu, "rps_min_freq", mhz, err);
+}
+
+int zenctl_gpu_i915_get_rps_max(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
+{
+    if (!gpu || !out_mhz) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_i915_get_rps_max");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    int64_t v = 0;
+    if (i915_read_attr(gpu, "rps_max_freq", &v, err) != 0) return -1;
+    *out_mhz = (int)v;
+    return 0;
+}
+
+int zenctl_gpu_i915_set_rps_max(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
+{
+    if (!gpu) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu",
+                        "zenctl_gpu_i915_set_rps_max");
+        return -1;
+    }
+    if (mhz < 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ERANGE, "frequency must be >= 0",
+                        "zenctl_gpu_i915_set_rps_max");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    return i915_write_attr(gpu, "rps_max_freq", mhz, err);
+}
+
+int zenctl_gpu_i915_get_rps_cur(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
+{
+    if (!gpu || !out_mhz) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_i915_get_rps_cur");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    int64_t v = 0;
+    if (i915_read_attr(gpu, "rps_cur_freq", &v, err) != 0) return -1;
+    *out_mhz = (int)v;
+    return 0;
+}
+
+int zenctl_gpu_i915_get_rps_boost(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
+{
+    if (!gpu || !out_mhz) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu or out",
+                        "zenctl_gpu_i915_get_rps_boost");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    int64_t v = 0;
+    if (i915_read_attr(gpu, "rps_boost_freq", &v, err) != 0) return -1;
+    *out_mhz = (int)v;
+    return 0;
+}
+
+int zenctl_gpu_i915_set_rps_boost(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
+{
+    if (!gpu) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL, "NULL gpu",
+                        "zenctl_gpu_i915_set_rps_boost");
+        return -1;
+    }
+    if (mhz < 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ERANGE, "frequency must be >= 0",
+                        "zenctl_gpu_i915_set_rps_boost");
+        return -1;
+    }
+    if (gpu_i915_check(gpu, err) != 0) return -1;
+    return i915_write_attr(gpu, "rps_boost_freq", mhz, err);
 }

@@ -24,6 +24,8 @@ int test_net_suite(void);
 int test_power_suite(void);
 int test_pcie_suite(void);
 int test_usb_suite(void);
+int test_nvml_suite(void);
+int test_bt_mgmt_suite(void);
 int test_firmware_suite(void);
 
 int main(void)
@@ -43,6 +45,8 @@ int main(void)
     total_fail += test_power_suite();
     total_fail += test_pcie_suite();
     total_fail += test_usb_suite();
+    total_fail += test_nvml_suite();
+    total_fail += test_bt_mgmt_suite();
     total_fail += test_firmware_suite();
 
     mock_sysfs_cleanup();
