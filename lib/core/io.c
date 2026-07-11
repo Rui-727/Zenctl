@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdint.h>
 
 #include "zenctl/internal.h"
 
@@ -157,4 +158,84 @@ int zenctl__write_file_i64(const char *path, int64_t val, zenctl_err_t *err)
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", (long long)val);
     return zenctl__write_file_string(path, buf, err);
+}
+
+int zenctl__read_file_binary(const char *path, uint8_t **out, size_t *out_len,
+                             zenctl_err_t *err)
+{
+    if (!path || !out || !out_len) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL,
+                        "NULL path or out", "zenctl__read_file_binary");
+        return -1;
+    }
+    *out = NULL;
+    *out_len = 0;
+
+    char rp[4096];
+    const char *rpath = zenctl__resolve_path(path, rp, sizeof(rp));
+
+    FILE *f = fopen(rpath, "rb");
+    if (!f) {
+        zenctl__set_err(err, zenctl__errno_to_code(errno),
+                        strerror(errno), path);
+        return -1;
+    }
+
+    /* Grow a heap buffer to fit the whole file. Used for EFI variable
+     * payloads (small) and ACPI tables (often tens of KB). */
+    size_t cap = 256, len = 0;
+    uint8_t *buf = malloc(cap);
+    if (!buf) {
+        int saved = errno;
+        fclose(f);
+        zenctl__set_err(err, ZENCTL_ERR_NOMEM, "malloc failed", path);
+        (void)saved;
+        return -1;
+    }
+    for (;;) {
+        if (len == cap) {
+            size_t ncap = cap * 2;
+            uint8_t *nb = realloc(buf, ncap);
+            if (!nb) {
+                int saved = errno;
+                free(buf);
+                fclose(f);
+                zenctl__set_err(err, ZENCTL_ERR_NOMEM, "realloc failed", path);
+                (void)saved;
+                return -1;
+            }
+            buf = nb;
+            cap = ncap;
+        }
+        size_t r = fread(buf + len, 1, cap - len, f);
+        if (r == 0) break;
+        len += r;
+    }
+    int ferr = ferror(f);
+    int saved = errno;
+    fclose(f);
+    if (ferr) {
+        free(buf);
+        zenctl__set_err(err, zenctl__errno_to_code(saved),
+                        "read error", path);
+        return -1;
+    }
+
+    /* Add a trailing NUL (one byte past len) so callers that want to
+     * treat the buffer as a C string can. The NUL is NOT counted in
+     * *out_len. */
+    uint8_t *nb = realloc(buf, len + 1);
+    if (!nb) {
+        /* Original buffer is still valid; just NUL-terminate in place
+         * if there's room (there always is, since cap >= len). */
+        buf[len] = '\0';
+        *out = buf;
+        *out_len = len;
+        return 0;
+    }
+    buf = nb;
+    buf[len] = '\0';
+    *out = buf;
+    *out_len = len;
+    return 0;
 }

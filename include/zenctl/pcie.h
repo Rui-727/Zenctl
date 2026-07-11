@@ -28,6 +28,11 @@ int zenctl_pcie_get_max_link_width(zenctl_pcie_t *pcie, int *out, zenctl_err_t *
  * The returned string is the raw sysfs contents (active entry bracketed). */
 int zenctl_pcie_get_aspm_policy(char **out, zenctl_err_t *err);
 
+/* Set the global ASPM policy. Writes the bare policy name to
+ * /sys/module/pcie_aspm/parameters/policy (mode 0644, root-writable).
+ * Valid values: "default", "performance", "powersave", "powersupersave". */
+int zenctl_pcie_set_aspm_policy(const char *policy, zenctl_err_t *err);
+
 /* Power management. /sys/bus/pci/devices/<addr>/power/control and
  * /sys/bus/pci/devices/<addr>/d3cold_allowed. */
 int zenctl_pcie_get_power_control(zenctl_pcie_t *pcie, char **out, zenctl_err_t *err);

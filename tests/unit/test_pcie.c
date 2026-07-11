@@ -133,12 +133,74 @@ static void test_pcie_open_bad_addr(void)
     OK(pcie == NULL, "pcie_open(\"../etc/passwd\") rejected");
 }
 
+static void test_pcie_aspm_policy(void)
+{
+    /* /sys/module/pcie_aspm/parameters/policy is mode 0644: the mock
+     * fixture creates it writable, so set_aspm_policy should succeed. */
+    mock_sysfs_create_dir("sys/module/pcie_aspm/parameters");
+    mock_sysfs_create_file("sys/module/pcie_aspm/parameters/policy",
+                           "[default] performance powersave powersupersave");
+
+    /* setter: write a valid policy */
+    zenctl_err_t err;
+    memset(&err, 0, sizeof(err));
+    int rc = zenctl_pcie_set_aspm_policy("performance", &err);
+    OK(rc == 0, "set_aspm_policy(\"performance\") returns 0");
+
+    char buf[256];
+    int n = mock_sysfs_read_file("sys/module/pcie_aspm/parameters/policy",
+                                 buf, sizeof(buf));
+    OK(n >= 0, "policy file exists after set_aspm_policy write");
+    OK(strcmp(buf, "performance") == 0,
+       "policy file contains \"performance\" after set_aspm_policy");
+
+    /* setter: each accepted policy name */
+    const char *const names[] = {
+        "default", "performance", "powersave", "powersupersave"
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        memset(&err, 0, sizeof(err));
+        rc = zenctl_pcie_set_aspm_policy(names[i], &err);
+        OK(rc == 0, "set_aspm_policy(accepted name) returns 0");
+    }
+
+    /* setter: reject invalid policy */
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_pcie_set_aspm_policy("bogus", &err);
+    OK(rc == -1, "set_aspm_policy(\"bogus\") rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_aspm_policy(invalid) sets ZENCTL_ERR_EINVAL");
+
+    /* setter: reject NULL / empty */
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_pcie_set_aspm_policy(NULL, &err);
+    OK(rc == -1, "set_aspm_policy(NULL) rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_aspm_policy(NULL) sets ZENCTL_ERR_EINVAL");
+
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_pcie_set_aspm_policy("", &err);
+    OK(rc == -1, "set_aspm_policy(\"\") rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_aspm_policy(\"\") sets ZENCTL_ERR_EINVAL");
+
+    /* getter still works (reads the file we last wrote) */
+    char *s = NULL;
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_pcie_get_aspm_policy(&s, &err);
+    OK(rc == 0, "get_aspm_policy returns 0");
+    OK(s && strcmp(s, "powersupersave") == 0,
+       "get_aspm_policy returns last-written \"powersupersave\"");
+    free(s);
+}
+
 int test_pcie_suite(void)
 {
     SUITE_START("PCIe domain");
     test_pcie_device();
     test_pcie_open_missing();
     test_pcie_open_bad_addr();
+    test_pcie_aspm_policy();
     SUITE_END();
     return SUITE_FAILURES();
 }

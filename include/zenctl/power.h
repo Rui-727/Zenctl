@@ -60,6 +60,15 @@ int zenctl_power_ac_online(bool *out, zenctl_err_t *err);
 /* Wake sources */
 int zenctl_power_get_wakeup_devices(char ***out_list, int *out_count, zenctl_err_t *err);
 
+/* Toggle a wake source. Writing a device name to /proc/acpi/wakeup
+ * toggles its enabled state, so to set an absolute state we first
+ * read the current state and only write if it differs. Returns 0 on
+ * success (including when the device is already in the desired
+ * state), -1 on error (ZENCTL_ERR_ENOENT if the device is not listed
+ * in /proc/acpi/wakeup, ZENCTL_ERR_EINVAL on a NULL or malformed
+ * device name). */
+int zenctl_power_set_wakeup(const char *device, bool enabled, zenctl_err_t *err);
+
 #ifdef __cplusplus
 }
 #endif

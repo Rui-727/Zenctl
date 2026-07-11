@@ -830,34 +830,73 @@ int zenctl_gpu_nvidia_set_power_limit(zenctl_gpu_t *gpu, int32_t mw, zenctl_err_
 /* ── Intel i915-specific (RPS / RC6) ─────────────────────────────── */
 /*
  * The i915 driver exposes RC6 (render standby) and RPS (Render
- * Performance Steering, GPU frequency scaling) controls via sysfs
- * files under /sys/class/drm/cardN/device/. Frequencies are in MHz.
+ * Performance Steering, GPU frequency scaling) controls via sysfs.
+ * Frequencies are in MHz.
  *
- *   rc6_enable     - 0/1, RW
- *   rps_min_freq   - MHz, RW
- *   rps_max_freq   - MHz, RW
- *   rps_cur_freq   - MHz, RO
- *   rps_boost_freq - MHz, RW
+ * Modern kernels (6.2+) moved these under device/gt/gtN/ and gave
+ * the RPS frequency files a `_mhz` suffix:
  *
- * These only exist when driver == i915. The newer "xe" driver uses
- * a different surface and is not handled here.
+ *   gt/gt0/rc6_enable          R    bitmask (bit0=RC6, bit1=RC6p, bit2=RC6pp)
+ *   gt/gt0/rps_min_freq_mhz    RW   min frequency
+ *   gt/gt0/rps_max_freq_mhz    RW   max frequency
+ *   gt/gt0/rps_cur_freq_mhz    R    current requested frequency
+ *   gt/gt0/rps_boost_freq_mhz  RW   boost frequency
+ *
+ * Older kernels put the same files directly under device/ without
+ * the `_mhz` suffix:
+ *
+ *   rc6_enable, rps_min_freq, rps_max_freq, rps_cur_freq, rps_boost_freq
+ *
+ * We probe the modern path first and fall back to the legacy path so
+ * the library works on both. These only exist when driver == i915;
+ * the newer "xe" driver uses a different surface and is not handled
+ * here.
  */
 
+/* Resolve an i915 RPS/RC6 attribute path. `new_name` is the modern
+ * filename (with `_mhz` suffix for RPS files), `old_name` is the
+ * legacy filename (no suffix). Tries device/gt/gt0/<new_name> first,
+ * then device/<old_name>. On success fills `out` with the resolved
+ * path and returns 0. On failure returns -1 with err set to
+ * ZENCTL_ERR_ENOENT (neither path exists). */
+static int i915_resolve_attr(zenctl_gpu_t *gpu,
+                             const char *new_name, const char *old_name,
+                             char *out, size_t outsz, zenctl_err_t *err)
+{
+    snprintf(out, outsz, "%s/gt/gt0/%s", gpu->device_path, new_name);
+    if (access(out, F_OK) == 0) return 0;
+    snprintf(out, outsz, "%s/%s", gpu->device_path, old_name);
+    if (access(out, F_OK) == 0) return 0;
+    /* Neither path exists. Surface the modern path so the caller's
+     * read/write returns a clear ENOENT. */
+    snprintf(out, outsz, "%s/gt/gt0/%s", gpu->device_path, new_name);
+    zenctl__set_err(err, ZENCTL_ERR_ENOENT,
+                    "i915 attribute not present on this kernel",
+                    new_name);
+    return -1;
+}
+
 /* Helper: read an i915 RPS/RC6 sysfs attribute as an int. */
-static int i915_read_attr(zenctl_gpu_t *gpu, const char *name,
+static int i915_read_attr(zenctl_gpu_t *gpu,
+                          const char *new_name, const char *old_name,
                           int64_t *out, zenctl_err_t *err)
 {
     char path[8192];
-    snprintf(path, sizeof(path), "%s/%s", gpu->device_path, name);
+    if (i915_resolve_attr(gpu, new_name, old_name,
+                          path, sizeof(path), err) != 0)
+        return -1;
     return zenctl__read_file_i64(path, out, err);
 }
 
 /* Helper: write an i915 RPS/RC6 sysfs attribute as an int. */
-static int i915_write_attr(zenctl_gpu_t *gpu, const char *name,
+static int i915_write_attr(zenctl_gpu_t *gpu,
+                           const char *new_name, const char *old_name,
                            int64_t val, zenctl_err_t *err)
 {
     char path[8192];
-    snprintf(path, sizeof(path), "%s/%s", gpu->device_path, name);
+    if (i915_resolve_attr(gpu, new_name, old_name,
+                          path, sizeof(path), err) != 0)
+        return -1;
     return zenctl__write_file_i64(path, val, err);
 }
 
@@ -870,8 +909,12 @@ int zenctl_gpu_i915_get_rc6(zenctl_gpu_t *gpu, bool *out, zenctl_err_t *err)
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
     int64_t v = 0;
-    if (i915_read_attr(gpu, "rc6_enable", &v, err) != 0) return -1;
-    *out = (v != 0);
+    if (i915_read_attr(gpu, "rc6_enable", "rc6_enable", &v, err) != 0)
+        return -1;
+    /* rc6_enable is a bitmask: bit 0 = RC6 (render standby),
+     * bit 1 = RC6p (deep), bit 2 = RC6pp (deepest). Expose just
+     * the basic RC6 bit so callers get a clean bool. */
+    *out = (v & 0x1) != 0;
     return 0;
 }
 
@@ -883,7 +926,21 @@ int zenctl_gpu_i915_set_rc6(zenctl_gpu_t *gpu, bool on, zenctl_err_t *err)
         return -1;
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
-    return i915_write_attr(gpu, "rc6_enable", on ? 1 : 0, err);
+    char path[8192];
+    if (i915_resolve_attr(gpu, "rc6_enable", "rc6_enable",
+                          path, sizeof(path), err) != 0)
+        return -1;
+    /* Modern kernels expose rc6_enable as read-only (mode 0444). The
+     * enable/disable knob is the i915.enable_rc6 module parameter,
+     * not this sysfs file. Detect the read-only case and surface a
+     * clear ENOTSUP instead of letting the write fail with EPERM. */
+    if (access(path, W_OK) != 0) {
+        zenctl__set_err(err, ZENCTL_ERR_ENOTSUP,
+                        "RC6 is read-only on this kernel",
+                        "zenctl_gpu_i915_set_rc6");
+        return -1;
+    }
+    return zenctl__write_file_string(path, on ? "1" : "0", err);
 }
 
 int zenctl_gpu_i915_get_rps_min(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
@@ -895,7 +952,8 @@ int zenctl_gpu_i915_get_rps_min(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *e
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
     int64_t v = 0;
-    if (i915_read_attr(gpu, "rps_min_freq", &v, err) != 0) return -1;
+    if (i915_read_attr(gpu, "rps_min_freq_mhz", "rps_min_freq", &v, err) != 0)
+        return -1;
     *out_mhz = (int)v;
     return 0;
 }
@@ -913,7 +971,7 @@ int zenctl_gpu_i915_set_rps_min(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
         return -1;
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
-    return i915_write_attr(gpu, "rps_min_freq", mhz, err);
+    return i915_write_attr(gpu, "rps_min_freq_mhz", "rps_min_freq", mhz, err);
 }
 
 int zenctl_gpu_i915_get_rps_max(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
@@ -925,7 +983,8 @@ int zenctl_gpu_i915_get_rps_max(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *e
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
     int64_t v = 0;
-    if (i915_read_attr(gpu, "rps_max_freq", &v, err) != 0) return -1;
+    if (i915_read_attr(gpu, "rps_max_freq_mhz", "rps_max_freq", &v, err) != 0)
+        return -1;
     *out_mhz = (int)v;
     return 0;
 }
@@ -943,7 +1002,7 @@ int zenctl_gpu_i915_set_rps_max(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
         return -1;
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
-    return i915_write_attr(gpu, "rps_max_freq", mhz, err);
+    return i915_write_attr(gpu, "rps_max_freq_mhz", "rps_max_freq", mhz, err);
 }
 
 int zenctl_gpu_i915_get_rps_cur(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *err)
@@ -955,7 +1014,8 @@ int zenctl_gpu_i915_get_rps_cur(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t *e
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
     int64_t v = 0;
-    if (i915_read_attr(gpu, "rps_cur_freq", &v, err) != 0) return -1;
+    if (i915_read_attr(gpu, "rps_cur_freq_mhz", "rps_cur_freq", &v, err) != 0)
+        return -1;
     *out_mhz = (int)v;
     return 0;
 }
@@ -969,7 +1029,8 @@ int zenctl_gpu_i915_get_rps_boost(zenctl_gpu_t *gpu, int *out_mhz, zenctl_err_t 
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
     int64_t v = 0;
-    if (i915_read_attr(gpu, "rps_boost_freq", &v, err) != 0) return -1;
+    if (i915_read_attr(gpu, "rps_boost_freq_mhz", "rps_boost_freq", &v, err) != 0)
+        return -1;
     *out_mhz = (int)v;
     return 0;
 }
@@ -987,5 +1048,5 @@ int zenctl_gpu_i915_set_rps_boost(zenctl_gpu_t *gpu, int mhz, zenctl_err_t *err)
         return -1;
     }
     if (gpu_i915_check(gpu, err) != 0) return -1;
-    return i915_write_attr(gpu, "rps_boost_freq", mhz, err);
+    return i915_write_attr(gpu, "rps_boost_freq_mhz", "rps_boost_freq", mhz, err);
 }

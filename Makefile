@@ -130,6 +130,7 @@ TEST_SRC = tests/unit/test_main.c \
            tests/unit/test_usb.c \
            $(wildcard tests/unit/test_wireless.c) \
            tests/unit/test_firmware.c \
+           tests/unit/test_gpu.c \
            $(wildcard tests/unit/test_nvml.c) \
            $(wildcard tests/unit/test_bt_mgmt.c) \
            $(wildcard tests/unit/test_errors.c) \

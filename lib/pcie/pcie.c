@@ -237,6 +237,34 @@ int zenctl_pcie_get_aspm_policy(char **out, zenctl_err_t *err)
     return 0;
 }
 
+int zenctl_pcie_set_aspm_policy(const char *policy, zenctl_err_t *err)
+{
+    static const char *const valid[] = {
+        "default", "performance", "powersave", "powersupersave", NULL
+    };
+
+    if (!policy || !*policy) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL,
+                        "NULL or empty policy",
+                        "zenctl_pcie_set_aspm_policy");
+        return -1;
+    }
+    bool ok = false;
+    for (int i = 0; valid[i]; i++) {
+        if (strcmp(policy, valid[i]) == 0) { ok = true; break; }
+    }
+    if (!ok) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx),
+                 "policy=%s (expected default|performance|powersave|powersupersave)",
+                 policy);
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL,
+                        "invalid ASPM policy", ctx);
+        return -1;
+    }
+    return zenctl__write_file_string(ZENCTL_ASPM_POLICY, policy, err);
+}
+
 /* ── Power management ────────────────────────────────────────────── */
 
 int zenctl_pcie_get_power_control(zenctl_pcie_t *pcie, char **out,

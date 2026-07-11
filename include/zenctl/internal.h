@@ -37,4 +37,13 @@ int  zenctl__read_file_i64(const char *path, int64_t *out, zenctl_err_t *err);
 /* Write a signed 64-bit integer to `path` as base-10 ASCII. */
 int  zenctl__write_file_i64(const char *path, int64_t val, zenctl_err_t *err);
 
+/* Read the entire contents of `path` into a heap-allocated buffer.
+ * Returns the buffer and its byte length via *out and *out_len. The
+ * buffer is NUL-terminated one byte past *out_len for caller
+ * convenience, but NO string trimming is performed (raw bytes are
+ * returned as-is). Caller frees with free(). Returns 0 on success,
+ * -1 on error. */
+int  zenctl__read_file_binary(const char *path, uint8_t **out, size_t *out_len,
+                              zenctl_err_t *err);
+
 #endif /* ZENCTL_INTERNAL_H */

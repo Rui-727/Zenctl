@@ -31,6 +31,7 @@ int test_firmware_suite(void);
 int test_errors_suite(void);
 int test_caps_suite(void);
 int test_kv_api_suite(void);
+int test_gpu_suite(void);
 
 int main(void)
 {
@@ -56,6 +57,7 @@ int main(void)
     total_fail += test_errors_suite();
     total_fail += test_caps_suite();
     total_fail += test_kv_api_suite();
+    total_fail += test_gpu_suite();
 
     mock_sysfs_cleanup();
 

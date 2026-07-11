@@ -543,3 +543,79 @@ int zenctl_power_get_wakeup_devices(char ***out_list, int *out_count, zenctl_err
     *out_count = n;
     return 0;
 }
+
+/* ── Wake source toggle ──────────────────────────────────────────── */
+
+/* /proc/acpi/wakeup rows look like:
+ *   Device  S-state   Status   Sysfs node
+ *   LID       S4    *enabled   platform:PNP0C0D:00
+ *   PEG0      S4    *disabled  pci:0000:00:01.0
+ *
+ * Writing the device name (e.g. "PEG0") to /proc/acpi/wakeup toggles
+ * its enabled state. To set an absolute state we parse the current
+ * state and only write if it differs. */
+int zenctl_power_set_wakeup(const char *device, bool enabled, zenctl_err_t *err)
+{
+    if (!device || !*device) {
+        zenctl__set_err(err, ZENCTL_ERR_EINVAL,
+                        "NULL or empty device",
+                        "zenctl_power_set_wakeup");
+        return -1;
+    }
+    /* Reject anything that looks like path traversal or whitespace.
+     * ACPI device names are short alphanumeric tokens (LID, PEG0,
+     * PNP0C0D, ...). */
+    for (const char *c = device; *c; c++) {
+        unsigned char ch = (unsigned char)*c;
+        if (ch == '/' || ch == '\n' || ch == '\r' || ch == '\t' ||
+            ch == ' ') {
+            zenctl__set_err(err, ZENCTL_ERR_EINVAL,
+                            "invalid device name", device);
+            return -1;
+        }
+    }
+
+    /* Read the current wakeup table. /proc/acpi/wakeup is typically
+     * a few KB at most (one row per wake source). */
+    char wbuf[16384];
+    if (zenctl__read_file_string("/proc/acpi/wakeup", wbuf, sizeof(wbuf),
+                                 err) != 0)
+        return -1;
+
+    /* Parse row by row. The first line is a header; some kernels
+     * also print a "---" separator. Each remaining row's first
+     * whitespace-delimited token is the device name, third token is
+     * the status ("*enabled" or "*disabled"). */
+    bool found = false;
+    bool currently_enabled = false;
+    char *save_line = NULL;
+    for (char *line = strtok_r(wbuf, "\n", &save_line);
+         line; line = strtok_r(NULL, "\n", &save_line)) {
+        char *save_tok = NULL;
+        char *dev = strtok_r(line, " \t", &save_tok);
+        if (!dev) continue;
+        if (dev[0] == '-' || !isalpha((unsigned char)dev[0])) continue;
+        if (strcmp(dev, device) != 0) continue;
+        /* S-state (skip) + status */
+        (void)strtok_r(NULL, " \t", &save_tok);
+        char *status = strtok_r(NULL, " \t", &save_tok);
+        if (!status) continue;
+        found = true;
+        currently_enabled = (strcmp(status, "*enabled") == 0);
+        break;
+    }
+
+    if (!found) {
+        char ctx[128];
+        snprintf(ctx, sizeof(ctx), "device=%s", device);
+        zenctl__set_err(err, ZENCTL_ERR_ENOENT,
+                        "device not in /proc/acpi/wakeup", ctx);
+        return -1;
+    }
+
+    /* Already in the desired state: nothing to do. */
+    if (currently_enabled == enabled) return 0;
+
+    /* Toggle by writing the device name. */
+    return zenctl__write_file_string("/proc/acpi/wakeup", device, err);
+}

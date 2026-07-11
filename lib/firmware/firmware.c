@@ -6,9 +6,19 @@
  * (/sys/class/firmware-attributes/<vendor>/). See
  * docs/KERNEL_USB_BT_FW.md section 4.
  *
- * The sysfs I/O helpers are local static functions; the USB/BT
- * modules have their own (lib/usb/internal.c) but we keep firmware
- * self-contained to avoid cross-module coupling.
+ * All sysfs text reads/writes go through the shared io.c helpers
+ * (zenctl__read_file_string, zenctl__write_file_string) so the
+ * ZENCTL_SYSFS_PREFIX mock redirection works for tests. Binary reads
+ * (EFI variables, ACPI tables) use zenctl__read_file_binary. The few
+ * remaining direct syscalls are the statfs() efivarfs-mount check
+ * (resolved against the prefix by fw_resolve_path below) and the
+ * FS_IOC_{GET,SET}FLAGS ioctls for the efivar immutable flag (which
+ * the test fixture on tmpfs doesn't support, so they no-op).
+ *
+ * Binary writes (the 4-byte zero-attribute delete marker and the
+ * 4-byte LE attributes + payload write) cannot use
+ * zenctl__write_file_string because the buffers contain NUL bytes;
+ * they go through a small local write_binary() helper.
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -28,6 +38,7 @@
 #include <unistd.h>
 
 #include "zenctl/zenctl.h"
+#include "zenctl/internal.h"
 #include "zenctl/firmware.h"
 
 #define DMI_ID_BASE        "/sys/class/dmi/id"
@@ -76,90 +87,49 @@ static void set_err(zenctl_err_t *err, int code, const char *msg, const char *ct
 
 /* ── File I/O helpers ───────────────────────────────────────────── */
 
+/* Resolve a /sys or /proc path against ZENCTL_SYSFS_PREFIX. Returns
+ * a pointer to either `path` (unchanged) or `buf` (rewritten as
+ * "<prefix><path>"). Used for the direct statfs() call in
+ * efivars_mounted(); the shared io.c helpers do their own resolution
+ * for read/write paths. `buf` must be at least strlen(path)+256
+ * bytes. */
+static const char *fw_resolve_path(const char *path, char *buf, size_t bufsz)
+{
+    const char *prefix = getenv("ZENCTL_SYSFS_PREFIX");
+    if (!prefix || !*prefix) return path;
+    if (strncmp(path, "/sys/", 5) == 0 || strncmp(path, "/proc/", 6) == 0) {
+        int n = snprintf(buf, bufsz, "%s%s", prefix, path);
+        if (n < 0 || (size_t)n >= bufsz) return path;
+        return buf;
+    }
+    return path;
+}
+
+/* Read a sysfs text file into a freshly allocated string. Trailing
+ * CR/LF is stripped by the shared io.c helper. Used for DMI strings,
+ * BIOS setting fields, and similar small (<8KB) text attributes. */
 static int read_text(const char *path, char **out, zenctl_err_t *err)
 {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { set_err_from_errno(err, errno, path); return -1; }
-    size_t cap = 256, len = 0;
-    char *buf = malloc(cap);
-    if (!buf) { close(fd); set_err(err, ZENCTL_ERR_NOMEM, "oom", path); return -1; }
-    for (;;) {
-        if (len + 1 >= cap) {
-            size_t ncap = cap * 2;
-            char *n = realloc(buf, ncap);
-            if (!n) { free(buf); close(fd); set_err(err, ZENCTL_ERR_NOMEM, "oom", path); return -1; }
-            buf = n; cap = ncap;
-        }
-        ssize_t r = read(fd, buf + len, cap - len - 1);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            int e = errno; free(buf); close(fd);
-            set_err_from_errno(err, e, path);
-            return -1;
-        }
-        if (r == 0) break;
-        len += (size_t)r;
+    char buf[8192];
+    if (zenctl__read_file_string(path, buf, sizeof(buf), err) != 0)
+        return -1;
+    char *s = strdup(buf);
+    if (!s) {
+        set_err(err, ZENCTL_ERR_NOMEM, "strdup failed", path);
+        return -1;
     }
-    close(fd);
-    buf[len] = '\0';
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
-        buf[--len] = '\0';
-    *out = buf;
+    *out = s;
     return 0;
 }
 
-static int read_binary(const char *path, uint8_t **out, size_t *out_size, zenctl_err_t *err)
+/* Write a binary buffer with O_CREAT|O_TRUNC. Used for the two EFI
+ * variable writes that are not C strings: the 4-byte zero-attribute
+ * delete marker and the 4-byte LE attributes + payload write. Text
+ * writes go through zenctl__write_file_string instead. */
+static int write_binary(const char *path, const uint8_t *data, size_t len,
+                        zenctl_err_t *err)
 {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { set_err_from_errno(err, errno, path); return -1; }
-    size_t cap = 256, len = 0;
-    uint8_t *buf = malloc(cap);
-    if (!buf) { close(fd); set_err(err, ZENCTL_ERR_NOMEM, "oom", path); return -1; }
-    for (;;) {
-        if (len == cap) {
-            size_t ncap = cap * 2;
-            uint8_t *n = realloc(buf, ncap);
-            if (!n) { free(buf); close(fd); set_err(err, ZENCTL_ERR_NOMEM, "oom", path); return -1; }
-            buf = n; cap = ncap;
-        }
-        ssize_t r = read(fd, buf + len, cap - len);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            int e = errno; free(buf); close(fd);
-            set_err_from_errno(err, e, path);
-            return -1;
-        }
-        if (r == 0) break;
-        len += (size_t)r;
-    }
-    close(fd);
-    *out = buf;
-    *out_size = len;
-    return 0;
-}
-
-static int write_text_trunc(const char *path, const char *data, size_t len, zenctl_err_t *err)
-{
-    int fd = open(path, O_WRONLY | O_CLOEXEC | O_TRUNC);
-    if (fd < 0) { set_err_from_errno(err, errno, path); return -1; }
-    size_t off = 0;
-    while (off < len) {
-        ssize_t w = write(fd, data + off, len - off);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            int e = errno; close(fd);
-            set_err_from_errno(err, e, path);
-            return -1;
-        }
-        off += (size_t)w;
-    }
-    if (close(fd) < 0) { set_err_from_errno(err, errno, path); return -1; }
-    return 0;
-}
-
-static int write_binary_create(const char *path, const uint8_t *data, size_t len, zenctl_err_t *err)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(path, O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) { set_err_from_errno(err, errno, path); return -1; }
     size_t off = 0;
     while (off < len) {
@@ -276,7 +246,14 @@ int zenctl_fw_dmi_get(const char *field, char **out, zenctl_err_t *err)
 static bool efivars_mounted(zenctl_err_t *err)
 {
     struct statfs sb;
-    if (statfs(EFIVARS_BASE, &sb) < 0) {
+    /* statfs() is not a stdio call, so the shared io.c helpers don't
+     * resolve it against ZENCTL_SYSFS_PREFIX. Resolve manually so the
+     * mock fixture's tmpfs mount is checked. mock_preload's statfs
+     * shim also lies about f_type for this path so the EFIVARFS_MAGIC
+     * check passes on tmpfs. */
+    char rp[4096];
+    const char *p = fw_resolve_path(EFIVARS_BASE, rp, sizeof(rp));
+    if (statfs(p, &sb) < 0) {
         set_err_from_errno(err, errno, EFIVARS_BASE);
         return false;
     }
@@ -419,7 +396,7 @@ int zenctl_fw_efi_enumerate(zenctl_efi_var_t **out_list, int *out_count, zenctl_
         if (!fpath) { free(name); free(guid); continue; }
         uint8_t *raw = NULL;
         size_t raw_sz = 0;
-        if (read_binary(fpath, &raw, &raw_sz, NULL) == 0) {
+        if (zenctl__read_file_binary(fpath, &raw, &raw_sz, NULL) == 0) {
             if (n + 1 >= cap) {
                 size_t ncap = cap * 2;
                 zenctl_efi_var_t *na = realloc(arr, ncap * sizeof(*arr));
@@ -469,7 +446,7 @@ int zenctl_fw_efi_get(const char *name, const char *guid,
 
     uint8_t *raw = NULL;
     size_t raw_sz = 0;
-    int rc = read_binary(fpath, &raw, &raw_sz, err);
+    int rc = zenctl__read_file_binary(fpath, &raw, &raw_sz, err);
     free(fpath);
     if (rc != 0) return rc;
 
@@ -559,7 +536,7 @@ int zenctl_fw_efi_set(const char *name, const char *guid, uint32_t attributes,
         free(buf); free(fpath); return -1;
     }
 
-    int rc = write_binary_create(fpath, buf, total, err);
+    int rc = write_binary(fpath, buf, total, err);
 
     /* Restore the immutable flag if we cleared it. Best-effort: don't
      * clobber the write's error. */
@@ -595,9 +572,11 @@ int zenctl_fw_efi_delete(const char *name, const char *guid, zenctl_err_t *err)
         free(fpath); return -1;
     }
 
-    /* Delete by writing 4 bytes of zero attributes and no data. */
+    /* Delete by writing 4 bytes of zero attributes and no data.
+     * This is a binary write (the buffer contains NUL bytes) so it
+     * cannot go through zenctl__write_file_string. */
     uint8_t zero[4] = {0, 0, 0, 0};
-    int rc = write_text_trunc(fpath, (const char *)zero, 4, err);
+    int rc = write_binary(fpath, zero, 4, err);
 
     /* If the variable didn't get deleted (some firmware needs an
      * explicit unlink), try unlink() as a fallback. */
@@ -689,7 +668,7 @@ int zenctl_fw_acpi_get_table(const char *name, uint8_t **out_data, size_t *out_s
     }
     char *path = path_join(ACPI_TABLES_BASE, name);
     if (!path) { set_err(err, ZENCTL_ERR_NOMEM, "oom", "zenctl_fw_acpi_get_table"); return -1; }
-    int rc = read_binary(path, out_data, out_size, err);
+    int rc = zenctl__read_file_binary(path, out_data, out_size, err);
     free(path);
     return rc;
 }
@@ -940,7 +919,7 @@ int zenctl_fw_bios_set_setting(const char *name, const char *value,
                 char *cp = path_join(rp, "current_password");
                 free(rp);
                 if (!cp) continue;
-                int rc = write_text_trunc(cp, password, strlen(password), NULL);
+                int rc = zenctl__write_file_string(cp, password, NULL);
                 free(cp);
                 if (rc == 0) break;
             }
@@ -964,7 +943,7 @@ int zenctl_fw_bios_set_setting(const char *name, const char *value,
     free(spath);
     if (!cval) { set_err(err, ZENCTL_ERR_NOMEM, "oom", "fwattr_set"); return -1; }
 
-    int rc = write_text_trunc(cval, value, strlen(value), err);
+    int rc = zenctl__write_file_string(cval, value, err);
     free(cval);
 
     /* Clear the password file by writing an empty string. */
@@ -987,7 +966,7 @@ int zenctl_fw_bios_set_setting(const char *name, const char *value,
                             char *cp = path_join(rp, "current_password");
                             free(rp);
                             if (!cp) continue;
-                            write_text_trunc(cp, "", 0, NULL);
+                            zenctl__write_file_string(cp, "", NULL);
                             free(cp);
                         }
                         for (size_t i = 0; roles[i]; i++) free(roles[i]);

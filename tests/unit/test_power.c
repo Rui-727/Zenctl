@@ -130,11 +130,81 @@ static void test_battery_and_ac(void)
     OK(online == false, "ac_online returns false (AC0/online==0)");
 }
 
+static void test_wakeup_toggle(void)
+{
+    /* /proc/acpi/wakeup has a header line and one row per wake source.
+     * Writing a device name toggles its state, so set_wakeup must
+     * parse the current state and only write when it differs. */
+    mock_sysfs_create_file(
+        "proc/acpi/wakeup",
+        "Device  S-state   Status   Sysfs node\n"
+        "LID       S4    *enabled   platform:PNP0C0D:00\n"
+        "PEG0      S4    *disabled  pci:0000:00:01.0\n");
+
+    zenctl_err_t err;
+    memset(&err, 0, sizeof(err));
+    /* PEG0 is *disabled: set_wakeup(true) must write "PEG0" to toggle. */
+    int rc = zenctl_power_set_wakeup("PEG0", true, &err);
+    OK(rc == 0, "set_wakeup(\"PEG0\", true) returns 0");
+    char buf[256];
+    int n = mock_sysfs_read_file("proc/acpi/wakeup", buf, sizeof(buf));
+    OK(n >= 0, "wakeup file exists after set_wakeup toggle");
+    OK(strcmp(buf, "PEG0") == 0,
+       "set_wakeup wrote \"PEG0\" to /proc/acpi/wakeup to toggle");
+
+    /* LID is already *enabled: set_wakeup(true) must be a no-op. */
+    mock_sysfs_create_file(
+        "proc/acpi/wakeup",
+        "Device  S-state   Status   Sysfs node\n"
+        "LID       S4    *enabled   platform:PNP0C0D:00\n"
+        "PEG0      S4    *disabled  pci:0000:00:01.0\n");
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_power_set_wakeup("LID", true, &err);
+    OK(rc == 0, "set_wakeup(\"LID\", true) returns 0 (already enabled, no-op)");
+    n = mock_sysfs_read_file("proc/acpi/wakeup", buf, sizeof(buf));
+    OK(n >= 0, "wakeup file still readable after no-op set_wakeup");
+    /* File contents should be unchanged: still the full table, NOT "LID". */
+    OK(strstr(buf, "LID") != NULL && strstr(buf, "Device") != NULL,
+       "set_wakeup no-op left the wakeup table intact");
+
+    /* Unknown device -> ENOENT. */
+    mock_sysfs_create_file(
+        "proc/acpi/wakeup",
+        "Device  S-state   Status   Sysfs node\n"
+        "LID       S4    *enabled   platform:PNP0C0D:00\n");
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_power_set_wakeup("NOPE", true, &err);
+    OK(rc == -1, "set_wakeup(\"NOPE\") returns -1 (not in wakeup table)");
+    OK(err.code == ZENCTL_ERR_ENOENT,
+       "set_wakeup(unknown device) sets ZENCTL_ERR_ENOENT");
+
+    /* NULL / empty device -> EINVAL. */
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_power_set_wakeup(NULL, true, &err);
+    OK(rc == -1, "set_wakeup(NULL) rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_wakeup(NULL) sets ZENCTL_ERR_EINVAL");
+
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_power_set_wakeup("", true, &err);
+    OK(rc == -1, "set_wakeup(\"\") rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_wakeup(\"\") sets ZENCTL_ERR_EINVAL");
+
+    /* Path-traversal characters in device name -> EINVAL. */
+    memset(&err, 0, sizeof(err));
+    rc = zenctl_power_set_wakeup("../etc/passwd", true, &err);
+    OK(rc == -1, "set_wakeup(\"../etc/passwd\") rejected");
+    OK(err.code == ZENCTL_ERR_EINVAL,
+       "set_wakeup(path-traversal) sets ZENCTL_ERR_EINVAL");
+}
+
 int test_power_suite(void)
 {
     SUITE_START("power domain");
     test_supported_states();
     test_battery_and_ac();
+    test_wakeup_toggle();
     SUITE_END();
     return SUITE_FAILURES();
 }

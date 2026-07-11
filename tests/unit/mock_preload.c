@@ -158,18 +158,26 @@ int statfs(const char *path, struct statfs *sf)
     static statfs_fn real;
     if (!real) real = (statfs_fn)dlsym(RTLD_NEXT, "statfs");
     char buf[4096];
+    const char *used = path;
     if (redirect_path(path, buf, sizeof(buf))) {
-        int rc = real(buf, sf);
-        if (rc == 0) {
-            /* firmware.c checks f_type == EFIVARFS_MAGIC to decide
-             * whether efivarfs is mounted. The mock lives on tmpfs,
-             * so lie about the magic for the efivars path only. */
-            if (strcmp(path, "/sys/firmware/efi/efivars") == 0)
-                sf->f_type = ZENCTL_EFIVARFS_MAGIC;
-        }
-        return rc;
+        used = buf;
     }
-    return real(path, sf);
+    int rc = real(used, sf);
+    if (rc == 0) {
+        /* firmware.c checks f_type == EFIVARFS_MAGIC to decide whether
+         * efivarfs is mounted. The mock lives on tmpfs, so lie about
+         * the magic for the efivars path. firmware.c may pass either
+         * the bare "/sys/firmware/efi/efivars" (resolved by this shim)
+         * or an already-prefixed "<prefix>/sys/firmware/efi/efivars"
+         * (resolved manually by fw_resolve_path); match both via the
+         * suffix so the lie applies either way. */
+        static const char suffix[] = "/sys/firmware/efi/efivars";
+        size_t slen = sizeof(suffix) - 1;
+        size_t ulen = strlen(used);
+        if (ulen >= slen && strcmp(used + ulen - slen, suffix) == 0)
+            sf->f_type = ZENCTL_EFIVARFS_MAGIC;
+    }
+    return rc;
 }
 
 /* ---- open / open64 / openat ---- */
