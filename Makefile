@@ -12,8 +12,8 @@ ZENCTL_VERSION_MINOR ?= 1
 ZENCTL_VERSION_PATCH ?= 0
 VERSION := $(shell git describe --abbrev=4 --dirty 2>/dev/null || echo $(ZENCTL_VERSION_MAJOR).$(ZENCTL_VERSION_MINOR).$(ZENCTL_VERSION_PATCH))
 VERSION_DEFS := -DZENCTL_VERSION_MAJOR=$(ZENCTL_VERSION_MAJOR) \
-	        -DZENCTL_VERSION_MINOR=$(ZENCTL_VERSION_MINOR) \
-	        -DZENCTL_VERSION_PATCH=$(ZENCTL_VERSION_PATCH)
+                -DZENCTL_VERSION_MINOR=$(ZENCTL_VERSION_MINOR) \
+                -DZENCTL_VERSION_PATCH=$(ZENCTL_VERSION_PATCH)
 CFLAGS += $(VERSION_DEFS)
 
 # Optional Bluetooth development headers. When libbluetooth-dev is
@@ -40,24 +40,24 @@ LIBS = -ldl
 # are present in the working tree. Once a file is stable it can be
 # moved into the explicit list.
 LIB_SRC = lib/core/core.c \
-	  lib/core/io.c \
-	  lib/cpu/cpu.c \
-	  lib/mem/mem.c \
-	  lib/storage/storage.c \
-	  lib/net/net.c \
-	  lib/pcie/pcie.c \
-	  lib/gpu/gpu.c \
-	  lib/thermal/thermal.c \
-	  lib/power/power.c \
-	  lib/usb/util.c \
-	  lib/usb/rfkill.c \
-	  lib/usb/nl80211.c \
-	  lib/usb/usb.c \
-	  lib/usb/bt.c \
-	  lib/usb/wireless.c \
-	  lib/firmware/firmware.c \
-	  $(wildcard lib/gpu/nvml.c) \
-	  $(wildcard lib/usb/bt_mgmt.c)
+          lib/core/io.c \
+          lib/cpu/cpu.c \
+          lib/mem/mem.c \
+          lib/storage/storage.c \
+          lib/net/net.c \
+          lib/pcie/pcie.c \
+          lib/gpu/gpu.c \
+          lib/thermal/thermal.c \
+          lib/power/power.c \
+          lib/usb/util.c \
+          lib/usb/rfkill.c \
+          lib/usb/nl80211.c \
+          lib/usb/usb.c \
+          lib/usb/bt.c \
+          lib/usb/wireless.c \
+          lib/firmware/firmware.c \
+          $(wildcard lib/gpu/nvml.c) \
+          $(wildcard lib/usb/bt_mgmt.c)
 LIB_OBJ = $(LIB_SRC:.c=.o)
 
 libzenctl.so: $(LIB_OBJ)
@@ -69,26 +69,26 @@ lib: libzenctl.so
 
 # -- zenctl CLI --
 CLI_SRC = cli/main.c \
-	  cli/output.c \
-	  cli/cmd_util.c \
-	  cli/profile.c \
-	  cli/cmd/cpu.c \
-	  cli/cmd/mem.c \
-	  cli/cmd/storage.c \
-	  cli/cmd/net.c \
-	  cli/cmd/pcie.c \
-	  cli/cmd/gpu.c \
-	  cli/cmd/thermal.c \
-	  cli/cmd/power.c \
-	  cli/cmd/usb.c \
-	  cli/cmd/bt.c \
-	  cli/cmd/wireless.c \
-	  cli/cmd/firmware.c \
-	  cli/cmd/caps.c
+          cli/output.c \
+          cli/cmd_util.c \
+          cli/profile.c \
+          cli/cmd/cpu.c \
+          cli/cmd/mem.c \
+          cli/cmd/storage.c \
+          cli/cmd/net.c \
+          cli/cmd/pcie.c \
+          cli/cmd/gpu.c \
+          cli/cmd/thermal.c \
+          cli/cmd/power.c \
+          cli/cmd/usb.c \
+          cli/cmd/bt.c \
+          cli/cmd/wireless.c \
+          cli/cmd/firmware.c \
+          cli/cmd/caps.c
 CLI_OBJ = $(CLI_SRC:.c=.o)
 
 zenctl: $(CLI_OBJ) libzenctl.so
-	$(CC) $(CFLAGS) -o zenctl $(CLI_OBJ) -L. -lzenctl $(LIBS)
+	$(CC) $(CFLAGS) -o zenctl $(CLI_OBJ) -L. -lzenctl -Wl,-rpath,$(PREFIX)/lib $(LIBS)
 
 cli: zenctl
 
@@ -98,8 +98,8 @@ all: lib cli
 # -- pkg-config --
 zenctl.pc: zenctl.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' \
-	    -e 's|@VERSION@|$(VERSION)|g' \
-	    zenctl.pc.in > zenctl.pc
+            -e 's|@VERSION@|$(VERSION)|g' \
+            zenctl.pc.in > zenctl.pc
 
 pkgconfig: zenctl.pc
 
@@ -119,22 +119,22 @@ pkgconfig: zenctl.pc
 # explicit list.
 
 TEST_SRC = tests/unit/test_main.c \
-	   tests/unit/mock_sysfs.c \
-	   tests/unit/test_cpu.c \
-	   tests/unit/test_mem.c \
-	   tests/unit/test_storage.c \
-	   tests/unit/test_thermal.c \
-	   tests/unit/test_net.c \
-	   tests/unit/test_power.c \
-	   tests/unit/test_pcie.c \
-	   tests/unit/test_usb.c \
-	   $(wildcard tests/unit/test_wireless.c) \
-	   tests/unit/test_firmware.c \
-	   $(wildcard tests/unit/test_nvml.c) \
-	   $(wildcard tests/unit/test_bt_mgmt.c) \
-	   $(wildcard tests/unit/test_errors.c) \
-	   $(wildcard tests/unit/test_caps.c) \
-	   $(wildcard tests/unit/test_kv_api.c)
+           tests/unit/mock_sysfs.c \
+           tests/unit/test_cpu.c \
+           tests/unit/test_mem.c \
+           tests/unit/test_storage.c \
+           tests/unit/test_thermal.c \
+           tests/unit/test_net.c \
+           tests/unit/test_power.c \
+           tests/unit/test_pcie.c \
+           tests/unit/test_usb.c \
+           $(wildcard tests/unit/test_wireless.c) \
+           tests/unit/test_firmware.c \
+           $(wildcard tests/unit/test_nvml.c) \
+           $(wildcard tests/unit/test_bt_mgmt.c) \
+           $(wildcard tests/unit/test_errors.c) \
+           $(wildcard tests/unit/test_caps.c) \
+           $(wildcard tests/unit/test_kv_api.c)
 
 zenctl-test: $(TEST_SRC) libzenctl.so libzenctl_mockpreload.so
 	$(CC) $(CFLAGS) $(INCS) -o zenctl-test $(TEST_SRC) -L. -lzenctl $(LIBS)
@@ -162,17 +162,17 @@ test-verbose: zenctl-test
 # per-source-file summary. Requires gcov (ships with gcc).
 coverage:
 	@command -v gcov >/dev/null 2>&1 || { \
-	        echo "gcov is not installed. Install it (e.g. 'apt install gcov'"; \
-	        echo "or 'dnf install gcc-gcov') to see coverage data."; \
-	        exit 0; \
+                echo "gcov is not installed. Install it (e.g. 'apt install gcov'"; \
+                echo "or 'dnf install gcc-gcov') to see coverage data."; \
+                exit 0; \
 	}
 	$(MAKE) clean
 	$(MAKE) CFLAGS="-std=gnu11 -Wall -Wextra -O0 -g --coverage -fprofile-arcs -ftest-coverage" test
 	@echo ""
 	@echo "=== Coverage summary ==="
 	@for f in lib/*/*.o; do \
-	        gcov -n "$$f" 2>/dev/null \
-	          | awk -F"'" '/^File:/{file=$$2} /^Lines executed:/{print file": "$$0}'; \
+                gcov -n "$$f" 2>/dev/null \
+                  | awk -F"'" '/^File:/{file=$$2} /^Lines executed:/{print file": "$$0}'; \
 	done | sort || true
 	@echo ""
 	@echo "Per-file .gcov reports are alongside the .o files (e.g. lib/core/core.c.gcov)."
@@ -214,7 +214,7 @@ uninstall:
 # -- clean --
 clean:
 	rm -f $(LIB_OBJ) $(CLI_OBJ) libzenctl.so* zenctl zenctl-test \
-	      zenctl-smoke libzenctl_mockpreload.so zenctl.pc
+              zenctl-smoke libzenctl_mockpreload.so zenctl.pc
 
 # -- pattern rules --
 %.o: %.c
