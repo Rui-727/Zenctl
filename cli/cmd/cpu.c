@@ -989,7 +989,7 @@ int cmd_cpu(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "smt")      == 0) return cpu_get_smt(rargc, rargv, json);
         if (strcmp(what, "cstate")   == 0) return cpu_get_cstate(rargc, rargv, json);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown cpu get target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown cpu get target '%s'. Valid: governor, freq, online, smt, cstate", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
@@ -1009,7 +1009,7 @@ int cmd_cpu(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "smt")      == 0) return cpu_set_smt(rargc, rargv, json, dry_run, confirm);
         if (strcmp(what, "cstate")   == 0) return cpu_set_cstate(rargc, rargv, json, dry_run);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown cpu set target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown cpu set target '%s'. Valid: governor, freq-min, freq-max, online, smt, cstate", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }

@@ -519,7 +519,7 @@ int cmd_mem(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "swappiness") == 0) return mem_get_swappiness(rargc, rargv, json);
         if (strcmp(what, "overcommit") == 0) return mem_get_overcommit(rargc, rargv, json);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown mem get target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown mem get target '%s'. Valid: hugepages, thp, numa, swappiness, overcommit", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
@@ -536,13 +536,13 @@ int cmd_mem(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "swappiness") == 0) return mem_set_swappiness(rargc, rargv, json, dry_run);
         if (strcmp(what, "overcommit") == 0) return mem_set_overcommit(rargc, rargv, json, dry_run);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown mem set target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown mem set target '%s'. Valid: hugepages, thp, swappiness, overcommit", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
 
     char buf[160];
-    snprintf(buf, sizeof(buf), "unknown mem subcommand '%s' (try 'get' or 'set')", sub);
+    snprintf(buf, sizeof(buf), "unknown mem subcommand '%s'. Try: get, set", sub);
     cmd_print_err(json, NULL, buf);
     return 1;
 }

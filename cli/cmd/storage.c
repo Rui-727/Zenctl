@@ -642,7 +642,7 @@ int cmd_storage(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "stats")        == 0) return st_get_stats(rargc, rargv, json);
         if (strcmp(what, "power")        == 0) return st_get_power(rargc, rargv, json);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown storage get target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown storage get target '%s'. Valid: scheduler, queue-depth, read-ahead, cache-type, stats, power", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
@@ -655,12 +655,12 @@ int cmd_storage(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "cache-type")   == 0) return st_set_cache_type(rargc, rargv, json, dry_run);
         if (strcmp(what, "power")        == 0) return st_set_power(rargc, rargv, json, dry_run);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown storage set target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown storage set target '%s'. Valid: scheduler, read-ahead, cache-type, power", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
     char buf[160];
-    snprintf(buf, sizeof(buf), "unknown storage subcommand '%s'", sub);
+    snprintf(buf, sizeof(buf), "unknown storage subcommand '%s'. Try: list, get, set", sub);
     cmd_print_err(json, NULL, buf);
     return 1;
 }

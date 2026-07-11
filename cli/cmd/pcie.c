@@ -425,7 +425,7 @@ int cmd_pcie(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "info")  == 0) return pcie_get_info(rargc, rargv, json);
         if (strcmp(what, "aspm")  == 0) return pcie_get_aspm(rargc, rargv, json);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown pcie get target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown pcie get target '%s'. Valid: link, power, iommu, numa, info, aspm", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
@@ -435,12 +435,12 @@ int cmd_pcie(int argc, char **argv, bool json, bool dry_run, bool confirm)
         int rargc = argc - 2; char **rargv = argv + 2;
         if (strcmp(what, "power") == 0) return pcie_set_power(rargc, rargv, json, dry_run);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown pcie set target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown pcie set target '%s'. Valid: power", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
     char buf[160];
-    snprintf(buf, sizeof(buf), "unknown pcie subcommand '%s'", sub);
+    snprintf(buf, sizeof(buf), "unknown pcie subcommand '%s'. Try: list, get, set", sub);
     cmd_print_err(json, NULL, buf);
     return 1;
 }

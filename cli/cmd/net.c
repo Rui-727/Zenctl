@@ -625,7 +625,7 @@ int cmd_net(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "mtu")     == 0) return net_get_mtu(rargc, rargv, json);
         if (strcmp(what, "irq")     == 0) return net_get_irq(rargc, rargv, json);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown net get target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown net get target '%s'. Valid: ring, offload, link, mtu, irq", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
@@ -641,12 +641,12 @@ int cmd_net(int argc, char **argv, bool json, bool dry_run, bool confirm)
         if (strcmp(what, "mtu")           == 0) return net_set_mtu(rargc, rargv, json, dry_run);
         if (strcmp(what, "irq-affinity")  == 0) return net_set_irq_affinity(rargc, rargv, json, dry_run);
         char buf[160];
-        snprintf(buf, sizeof(buf), "unknown net set target '%s'", what);
+        snprintf(buf, sizeof(buf), "unknown net set target '%s'. Valid: ring, offload, mtu, irq-affinity", what);
         cmd_print_err(json, NULL, buf);
         return 1;
     }
     char buf[160];
-    snprintf(buf, sizeof(buf), "unknown net subcommand '%s'", sub);
+    snprintf(buf, sizeof(buf), "unknown net subcommand '%s'. Try: list, get, set", sub);
     cmd_print_err(json, NULL, buf);
     return 1;
 }
