@@ -1,7 +1,7 @@
 .\" zenctl.1 - manual page for the zenctl CLI
 .\"
 .\" groff_man(7) source. View with: man -l man/zenctl.1
-.TH ZENCTL 1 "2026-01-01" "zenctl 0.1.0" "User Commands"
+.TH ZENCTL 1 "2026-07-11" "zenctl 0.1.0" "User Commands"
 .SH NAME
 zenctl \- hardware control for Linux
 .SH SYNOPSIS
@@ -34,501 +34,362 @@ flag or an interactive prompt.
 .B \-\-dry\-run
 is available on every write subcommand.
 .PP
-Domains: cpu, mem, storage, net, gpu, thermal, power, pcie, usb, bt,
-wireless, firmware.
+Domains: cpu, mem, storage, net, pcie, gpu, thermal, power, usb, bt,
+wireless, firmware. The
+.B profile
+and
+.B caps
+verbs sit outside the domain/subcommand pattern.
 .SH COMMANDS
 .SS "cpu \- CPU controls"
 .TP
 .B zenctl cpu get governor \-\-cpu N
 Print the active cpufreq governor for CPU N.
 .TP
-.B zenctl cpu set governor NAME \-\-cpu N|\fBall\fR
+.BI "zenctl cpu set governor " "NAME \-\-cpu N|all"
 Set the cpufreq governor (e.g. performance, powersave, schedutil).
 .TP
-.B zenctl cpu get freq\-min \-\-cpu N
-Print the minimum scaling frequency in Hz.
+.B zenctl cpu get freq \-\-cpu N
+Print the minimum and maximum scaling frequency in Hz.
 .TP
-.B zenctl cpu set freq\-min HZ \-\-cpu N|\fBall\fR
-Set the minimum scaling frequency.
+.BI "zenctl cpu set freq\-min " "HZ \-\-cpu N|all"
+Set the minimum scaling frequency. HZ accepts Hz, MHz, or GHz
+(see FREQUENCY UNITS below).
 .TP
-.B zenctl cpu get freq\-max \-\-cpu N
-Print the maximum scaling frequency in Hz.
-.TP
-.B zenctl cpu set freq\-max HZ \-\-cpu N|\fBall\fR
-Set the maximum scaling frequency.
+.BI "zenctl cpu set freq\-max " "HZ \-\-cpu N|all"
+Set the maximum scaling frequency. HZ accepts Hz, MHz, or GHz
+(see FREQUENCY UNITS below).
 .TP
 .B zenctl cpu get online \-\-cpu N
 Print whether CPU N is online.
 .TP
-.B zenctl cpu set online on|off \-\-cpu N
+.BI "zenctl cpu set online " "on|off \-\-cpu N"
 Bring CPU N online or take it offline. Destructive; requires
 .BR \-\-confirm .
 .TP
-.B zenctl cpu get smt\-active
+.B zenctl cpu get smt
 Print whether SMT is active.
 .TP
-.B zenctl cpu set smt\-active on|off
+.BI "zenctl cpu set smt " "on|off"
 Enable or disable SMT. Destructive; requires
 .BR \-\-confirm .
 .TP
-.B zenctl cpu get cstate\-disable STATE \-\-cpu N
-Print whether C-state STATE is disabled on CPU N.
+.BI "zenctl cpu get cstate " "\-\-cpu N \-\-state N"
+Print C-state disable flags for CPU N. Without
+.B \-\-state
+every C-state is listed.
 .TP
-.B zenctl cpu set cstate\-disable STATE on|off \-\-cpu N
-Disable or enable a C-state.
+.BI "zenctl cpu set cstate " "STATE enable|disable \-\-cpu N"
+Enable or disable C-state STATE on CPU N.
 .SS "mem \- memory, hugepages, NUMA, VM tunables"
 .TP
-.B zenctl mem get nr\-hugepages
-Print the number of default-size hugepages reserved.
+.B zenctl mem get hugepages
+Print the number of default-size hugepages reserved and the hugepage size.
 .TP
-.B zenctl mem set nr\-hugepages N
+.BI "zenctl mem set hugepages " N
 Set the number of default-size hugepages.
-.TP
-.B zenctl mem get hugepage\-size
-Print the default hugepage size in bytes.
-.TP
-.B zenctl mem get nr\-hugepages\-size SIZE_KB
-Print the number of hugepages reserved at size SIZE_KB (e.g. 2048, 1048576).
-.TP
-.B zenctl mem set nr\-hugepages\-size SIZE_KB N
-Set the number of hugepages for the given page size.
 .TP
 .B zenctl mem get thp
 Print the transparent huge pages mode (always, madvise, never).
 .TP
-.B zenctl mem set thp always|madvise|never
+.BI "zenctl mem set thp " "always|madvise|never"
 Set the THP mode.
 .TP
-.B zenctl mem numa node\-count
-Print the number of NUMA nodes (0 on non-NUMA systems).
-.TP
-.B zenctl mem numa get NODE
-Print NUMA node NODE's memory totals and CPU mask.
+.B zenctl mem get numa
+Print the NUMA node count plus per-node memory totals and CPU mask.
 .TP
 .B zenctl mem get swappiness
 Print /proc/sys/vm/swappiness.
 .TP
-.B zenctl mem set swappiness 0..200
+.BI "zenctl mem set swappiness " "0..200"
 Set vm.swappiness.
 .TP
 .B zenctl mem get overcommit
 Print /proc/sys/vm/overcommit_memory.
 .TP
-.B zenctl mem set overcommit 0|1|2
-Set vm.overcommit_memory.
-.TP
-.B zenctl mem get vfs\-cache\-pressure
-Print /proc/sys/vm/vfs_cache_pressure.
-.TP
-.B zenctl mem set vfs\-cache\-pressure N
-Set vm.vfs_cache_pressure.
+.BI "zenctl mem set overcommit " "0|1|2"
+Set vm.overcommit_memory (0 = heuristic, 1 = always, 2 = never).
 .SS "storage \- block device controls"
 .TP
-.B zenctl storage get scheduler \-\-dev DEV
-Print the active I/O scheduler for DEV.
+.B zenctl storage list
+List every block device under /sys/block.
 .TP
-.B zenctl storage set scheduler NAME \-\-dev DEV
+.BI "zenctl storage get scheduler " "\-\-dev DEV"
+Print the active I/O scheduler for DEV plus the available schedulers.
+.TP
+.BI "zenctl storage set scheduler " "NAME \-\-dev DEV"
 Set the I/O scheduler (e.g. mq-deadline, bfq, none, kyber).
 .TP
-.B zenctl storage list schedulers \-\-dev DEV
-Print every scheduler the kernel exposes for DEV, with the active one bracketed.
-.TP
-.B zenctl storage get queue\-depth \-\-dev DEV
+.BI "zenctl storage get queue\-depth " "\-\-dev DEV"
 Print the hardware queue depth.
 .TP
-.B zenctl storage set queue\-depth N \-\-dev DEV
-Set the hardware queue depth (SCSI only; NVMe is read-only).
-.TP
-.B zenctl storage get read\-ahead \-\-dev DEV
+.BI "zenctl storage get read\-ahead " "\-\-dev DEV"
 Print read-ahead in kB.
 .TP
-.B zenctl storage set read\-ahead KB \-\-dev DEV
+.BI "zenctl storage set read\-ahead " "KB \-\-dev DEV"
 Set read-ahead in kB.
 .TP
-.B zenctl storage get cache\-type \-\-dev DEV
+.BI "zenctl storage get cache\-type " "\-\-dev DEV"
 Print the write cache mode.
 .TP
-.B zenctl storage set cache\-type TYPE \-\-dev DEV
-Set the write cache mode (write-back, write-through, none, write-back-fua).
+.BI "zenctl storage set cache\-type " "TYPE \-\-dev DEV"
+Set the write cache mode (write_back, write_through, none).
 .TP
-.B zenctl storage get discard\-max \-\-dev DEV
-Print the maximum discard bytes per request.
+.BI "zenctl storage get stats " "\-\-dev DEV"
+Print the I/O stats line from /sys/block/<dev>/stat.
 .TP
-.B zenctl storage get rotational \-\-dev DEV
-Print whether DEV is rotational.
-.TP
-.B zenctl storage get io\-stats \-\-dev DEV
-Print the 17-field I/O stats line from /sys/block/<dev>/stat.
-.TP
-.B zenctl storage get power\-control \-\-dev DEV
+.BI "zenctl storage get power " "\-\-dev DEV"
 Print the runtime PM mode (on, auto).
 .TP
-.B zenctl storage set power\-control MODE \-\-dev DEV
+.BI "zenctl storage set power " "auto|on \-\-dev DEV"
 Set the runtime PM mode.
 .SS "net \- NIC controls"
 .TP
-.B zenctl net get ring\-rx \-\-iface IFACE
-Print the RX ring buffer size.
+.B zenctl net list
+List every interface under /sys/class/net.
 .TP
-.B zenctl net get ring\-rx\-max \-\-iface IFACE
-Print the hardware RX ring maximum.
+.BI "zenctl net get ring " "\-\-iface IFACE"
+Print the RX and TX ring sizes and their hardware maxima.
 .TP
-.B zenctl net set ring\-rx N \-\-iface IFACE
-Set the RX ring size.
+.BI "zenctl net set ring " "rx|tx N \-\-iface IFACE"
+Set the RX or TX ring size.
 .TP
-.B zenctl net get ring\-tx \-\-iface IFACE
-Print the TX ring buffer size.
+.BI "zenctl net get offload " "\-\-iface IFACE"
+Print the TSO, GRO, GSO, RXCSUM, and TXCSUM offload flags.
 .TP
-.B zenctl net get ring\-tx\-max \-\-iface IFACE
-Print the hardware TX ring maximum.
+.BI "zenctl net set offload " "tso|gro|gso|rxcsum|txcsum on|off \-\-iface IFACE"
+Set one offload flag.
 .TP
-.B zenctl net set ring\-tx N \-\-iface IFACE
-Set the TX ring size.
+.BI "zenctl net get link " "\-\-iface IFACE"
+Print link state, speed in Mbps, and duplex mode.
 .TP
-.BI "zenctl net get|set offload\-tso " "on|off \-\-iface IFACE"
-Get or set the TSO offload flag.
-.TP
-.BI "zenctl net get|set offload\-gro " "on|off \-\-iface IFACE"
-Get or set the GRO offload flag.
-.TP
-.BI "zenctl net get|set offload\-gso " "on|off \-\-iface IFACE"
-Get or set the GSO offload flag.
-.TP
-.BI "zenctl net get|set offload\-rxcsum " "on|off \-\-iface IFACE"
-Get or set the RX checksum offload flag.
-.TP
-.BI "zenctl net get|set offload\-txcsum " "on|off \-\-iface IFACE"
-Get or set the TX checksum offload flag.
-.TP
-.B zenctl net get speed \-\-iface IFACE
-Print the link speed in Mbps.
-.TP
-.B zenctl net get duplex \-\-iface IFACE
-Print the duplex mode.
-.TP
-.B zenctl net get link \-\-iface IFACE
-Print whether the link is up.
-.TP
-.B zenctl net get mtu \-\-iface IFACE
+.BI "zenctl net get mtu " "\-\-iface IFACE"
 Print the MTU.
 .TP
-.B zenctl net set mtu N \-\-iface IFACE
-Set the MTU.
+.BI "zenctl net set mtu " "N \-\-iface IFACE"
+Set the MTU (68..65536).
 .TP
-.B zenctl net get irq \-\-iface IFACE
-Print the IRQ number for IFACE.
+.BI "zenctl net get irq " "\-\-iface IFACE"
+Print the IRQ number and smp_affinity cpumask.
 .TP
-.B zenctl net get irq\-affinity \-\-iface IFACE
-Print the IRQ smp_affinity cpumask (hex).
+.BI "zenctl net set irq\-affinity " "MASK \-\-iface IFACE"
+Set the IRQ smp_affinity cpumask (hex).
+.SS "pcie \- PCIe link, power, ASPM, IOMMU, NUMA"
 .TP
-.B zenctl net set irq\-affinity MASK \-\-iface IFACE
-Set the IRQ smp_affinity cpumask.
+.B zenctl pcie list
+List every PCI device under /sys/bus/pci/devices.
+.TP
+.BI "zenctl pcie get link " "\-\-addr ADDR"
+Print current and maximum link speed and width.
+.TP
+.BI "zenctl pcie get power " "\-\-addr ADDR"
+Print the device runtime PM mode and D3cold-allowed flag.
+.TP
+.BI "zenctl pcie set power " "auto|on \-\-addr ADDR"
+Set the device runtime PM mode.
+.TP
+.BI "zenctl pcie get iommu " "\-\-addr ADDR"
+Print the IOMMU group ID for the device.
+.TP
+.BI "zenctl pcie get numa " "\-\-addr ADDR"
+Print the NUMA node for the device (-1 if unknown).
+.TP
+.BI "zenctl pcie get info " "\-\-addr ADDR"
+Print the PCI vendor ID, device ID, and class code.
+.TP
+.B zenctl pcie get aspm
+Print the global ASPM policy.
 .SS "gpu \- GPU controls"
 .TP
-.B zenctl gpu get driver \-\-dev N|PATH
-Print the DRM driver name.
+.B zenctl gpu list
+List every DRM card under /sys/class/drm.
 .TP
-.B zenctl gpu get vendor \-\-dev N|PATH
-Print the GPU vendor string.
-.TP
-.B zenctl gpu get temp \-\-dev N|PATH
+.BI "zenctl gpu get temp " "\-\-card N"
 Print the GPU temperature in millidegrees Celsius.
 .TP
-.BI "zenctl gpu get|set fan\-pwm " "N \-\-dev N|PATH"
-Get or set the fan PWM value (0-255).
+.BI "zenctl gpu get fan " "\-\-card N"
+Print the fan PWM value and auto-control flag.
 .TP
-.BI "zenctl gpu get|set fan\-auto " "on|off \-\-dev N|PATH"
-Get or set the fan auto-control mode.
+.BI "zenctl gpu set fan " "N|auto \-\-card N"
+Set the fan PWM (0-255) or enable auto control.
 .TP
-.B zenctl gpu get power \-\-dev N|PATH
+.BI "zenctl gpu get power " "\-\-card N"
 Print the current power draw in microwatts.
 .TP
-.B zenctl gpu get freq \-\-dev N|PATH
+.BI "zenctl gpu get freq " "\-\-card N"
 Print the current GPU clock in MHz.
 .TP
-.B zenctl gpu amdgpu get power\-profile \-\-dev N|PATH
+.BI "zenctl gpu get driver " "\-\-card N"
+Print the DRM driver name.
+.TP
+.BI "zenctl gpu get profile " "\-\-card N"
 Print the AMDGPU power profile.
 .TP
-.B zenctl gpu amdgpu set power\-profile NAME \-\-dev N|PATH
+.BI "zenctl gpu set profile " "NAME \-\-card N"
 Set the AMDGPU power profile.
 .TP
-.B zenctl gpu amdgpu get dpm\-state \-\-dev N|PATH
-Print the AMDGPU DPM state.
-.TP
-.B zenctl gpu amdgpu get busy\-percent \-\-dev N|PATH
+.BI "zenctl gpu get busy " "\-\-card N"
 Print the AMDGPU busy percentage.
+.TP
+.B zenctl gpu get \-\-all \-\-card N
+Print every readable attribute of every card, or the one selected by
+.BR \-\-card .
 .SS "thermal \- thermal zones, cooling devices, hwmon"
 .TP
-.B zenctl thermal get temp \-\-zone ZONE
+.B zenctl thermal list
+List every thermal zone.
+.TP
+.BI "zenctl thermal get temp " "\-\-zone Z"
 Print the zone temperature in millidegrees Celsius.
 .TP
-.B zenctl thermal get type \-\-zone ZONE
+.BI "zenctl thermal get type " "\-\-zone Z"
 Print the zone type string.
 .TP
-.B zenctl thermal get policy \-\-zone ZONE
+.BI "zenctl thermal get policy " "\-\-zone Z"
 Print the active thermal governor.
 .TP
-.B zenctl thermal set policy NAME \-\-zone ZONE
+.BI "zenctl thermal set policy " "NAME \-\-zone Z"
 Set the thermal governor.
 .TP
-.B zenctl thermal list policies \-\-zone ZONE
-Print every policy the kernel exposes for ZONE.
+.BI "zenctl thermal get mode " "\-\-zone Z"
+Print whether the zone is enabled.
 .TP
-.BI "zenctl thermal get|set mode " "on|off \-\-zone ZONE"
-Get or set the thermal zone enabled mode.
+.BI "zenctl thermal set mode " "enabled|disabled \-\-zone Z"
+Enable or disable the zone.
 .TP
-.B zenctl thermal get trip\-count \-\-zone ZONE
-Print the number of trip points.
+.BI "zenctl thermal get trips " "\-\-zone Z"
+Print every trip point (index, type, temp, hysteresis).
 .TP
-.B zenctl thermal get trip INDEX \-\-zone ZONE
-Print the trip point at INDEX (temp, type, hysteresis).
+.BI "zenctl thermal get cooling " "\-\-zone Z"
+Print every cooling device bound to Z (type, cur_state, max_state).
 .TP
-.B zenctl thermal get cooling\-count \-\-zone ZONE
-Print the number of cooling devices bound to ZONE.
-.TP
-.B zenctl thermal get cooling INDEX \-\-zone ZONE
-Print the cooling device at INDEX (type, cur_state, max_state).
-.TP
-.B zenctl thermal set cooling\-state INDEX STATE \-\-zone ZONE
+.BI "zenctl thermal set cooling " "INDEX STATE \-\-zone Z"
 Set the cur_state of cooling device INDEX.
 .TP
-.B zenctl thermal hwmon count
-Print the number of hwmon devices.
+.B zenctl thermal hwmon
+List every hwmon sensor.
 .TP
-.B zenctl thermal hwmon get\-temp HWMON SENSOR
-Print one hwmon temperature sensor reading.
+.BI "zenctl thermal hwmon fan " "HWMON FAN [N]"
+Get (no N) or set (N in 0..255) a hwmon fan PWM value.
+.SS "power \- sleep states, battery, AC, wake sources"
 .TP
-.BI "zenctl thermal hwmon get|set fan\-pwm " "HWMON FAN N"
-Get or set a hwmon fan PWM value.
-.TP
-.BI "zenctl thermal hwmon get|set fan\-auto " "HWMON FAN on|off"
-Get or set a hwmon fan auto-control mode.
-.SS "power \- sleep states, runtime PM, battery, AC, wake sources"
-.TP
-.B zenctl power get supported\-states
+.B zenctl power get states
 Print the supported ACPI sleep states.
 .TP
-.B zenctl power suspend freeze|mem|disk|standby
+.BI "zenctl power suspend " "freeze|mem|disk|standby \-\-confirm"
 Enter the given sleep state. Destructive; requires
 .BR \-\-confirm .
 .TP
-.B zenctl power get mem\-sleep\-mode
+.B zenctl power get mem\-sleep
 Print the mem_sleep mode (s2idle, shallow, deep).
 .TP
-.B zenctl power set mem\-sleep\-mode MODE
+.BI "zenctl power set mem\-sleep " MODE
 Set the mem_sleep mode.
 .TP
-.B zenctl power get runtime\-pm \-\-dev PATH
-Print the runtime PM mode for a device path.
+.BI "zenctl power get battery " "[N]"
+Print battery N status and capacity, or every battery when N is omitted.
 .TP
-.B zenctl power set runtime\-pm MODE \-\-dev PATH
-Set the runtime PM mode for a device path.
+.BI "zenctl power get charge\-thresholds " N
+Print the charge start and end thresholds for battery N.
 .TP
-.B zenctl power battery count
-Print the number of batteries.
+.BI "zenctl power set charge\-start " "N PERCENT"
+Set the charge-start threshold for battery N.
 .TP
-.B zenctl power battery get INDEX
-Print battery INDEX's status, capacity, and charge.
+.BI "zenctl power set charge\-end " "N PERCENT"
+Set the charge-end threshold for battery N.
 .TP
-.B zenctl power battery get\-charge\-start INDEX
-Print the charge-start threshold.
-.TP
-.B zenctl power battery set\-charge\-start INDEX PCT
-Set the charge-start threshold.
-.TP
-.B zenctl power battery get\-charge\-end INDEX
-Print the charge-end threshold.
-.TP
-.B zenctl power battery set\-charge\-end INDEX PCT
-Set the charge-end threshold.
-.TP
-.B zenctl power get ac\-online
+.B zenctl power get ac
 Print whether the AC adapter is online.
 .TP
-.B zenctl power get wakeup\-devices
+.B zenctl power get wakeup
 Print the list of configured wakeup devices.
-.SS "pcie \- PCIe link, ASPM, IOMMU, runtime PM"
-.TP
-.B zenctl pcie get link\-speed \-\-addr ADDR
-Print the current PCIe link speed string.
-.TP
-.B zenctl pcie get link\-width \-\-addr ADDR
-Print the current PCIe link width (lane count).
-.TP
-.B zenctl pcie get max\-link\-speed \-\-addr ADDR
-Print the maximum supported link speed.
-.TP
-.B zenctl pcie get max\-link\-width \-\-addr ADDR
-Print the maximum supported link width.
-.TP
-.B zenctl pcie get aspm\-policy
-Print the global ASPM policy string.
-.TP
-.B zenctl pcie get power\-control \-\-addr ADDR
-Print the device runtime PM mode.
-.TP
-.B zenctl pcie set power\-control MODE \-\-addr ADDR
-Set the device runtime PM mode.
-.TP
-.B zenctl pcie get d3cold\-allowed \-\-addr ADDR
-Print whether D3cold is allowed for the device.
-.TP
-.B zenctl pcie set d3cold\-allowed on|off \-\-addr ADDR
-Allow or disallow D3cold. Destructive; requires
-.BR \-\-confirm .
-.TP
-.B zenctl pcie get iommu\-group \-\-addr ADDR
-Print the IOMMU group ID for the device.
-.TP
-.B zenctl pcie get numa\-node \-\-addr ADDR
-Print the NUMA node for the device (-1 if unknown).
-.TP
-.B zenctl pcie get vendor\-id \-\-addr ADDR
-Print the PCI vendor ID.
-.TP
-.B zenctl pcie get device\-id \-\-addr ADDR
-Print the PCI device ID.
-.TP
-.B zenctl pcie get class \-\-addr ADDR
-Print the PCI class code.
 .SS "usb \- USB devices"
 .TP
-.B zenctl usb get vendor\-id \-\-dev PATH
-Print the USB vendor ID.
+.B zenctl usb list
+List every USB device under /sys/bus/usb/devices.
 .TP
-.B zenctl usb get product\-id \-\-dev PATH
-Print the USB product ID.
+.BI "zenctl usb get " "power|autosuspend|authorized|wakeup DEV"
+Print one USB device attribute.
 .TP
-.B zenctl usb get manufacturer \-\-dev PATH
-Print the manufacturer string.
+.BI "zenctl usb set power " "auto|on DEV"
+Set the runtime PM mode.
 .TP
-.B zenctl usb get product \-\-dev PATH
-Print the product string.
+.BI "zenctl usb set autosuspend " "DEV MS"
+Set the autosuspend delay in milliseconds.
 .TP
-.B zenctl usb get speed \-\-dev PATH
-Print the raw speed sysfs string.
-.TP
-.B zenctl usb get power\-control \-\-dev PATH
-Print the runtime PM mode.
-.TP
-.B zenctl usb set power\-control MODE \-\-dev PATH
-Set the runtime PM mode (auto, on).
-.TP
-.B zenctl usb get autosuspend\-delay \-\-dev PATH
-Print the autosuspend delay in ms.
-.TP
-.B zenctl usb set autosuspend\-delay MS \-\-dev PATH
-Set the autosuspend delay.
-.TP
-.B zenctl usb get runtime\-status \-\-dev PATH
-Print the runtime status (active, suspended, unsupported).
-.TP
-.B zenctl usb get authorized \-\-dev PATH
-Print whether the device is authorized.
-.TP
-.B zenctl usb set authorized on|off \-\-dev PATH
-Authorize or deauthorize a device. Destructive; requires
+.BI "zenctl usb set authorized " "DEV on|off"
+Authorize or deauthorize a device. Deauthorizing requires
 .BR \-\-confirm .
 .TP
-.B zenctl usb get wakeup \-\-dev PATH
-Print whether remote wakeup is enabled.
-.TP
-.B zenctl usb set wakeup on|off \-\-dev PATH
+.BI "zenctl usb set wakeup " "DEV on|off"
 Enable or disable remote wakeup.
 .TP
-.B zenctl usb reset \-\-dev PATH
-Reset the device via USBDEVFS_RESET. Destructive; requires
-.BR \-\-confirm .
-.TP
-.B zenctl usb enumerate
-List every USB device path under /sys/bus/usb/devices/.
+.BI "zenctl usb reset " DEV
+Reset the device via USBDEVFS_RESET.
 .SS "bt \- Bluetooth adapters"
 .TP
-.B zenctl bt get powered \-\-adapter NAME
-Print whether the adapter is powered.
+.B zenctl bt list
+List every adapter under /sys/class/bluetooth.
 .TP
-.B zenctl bt set powered on|off \-\-adapter NAME
+.BI "zenctl bt get " "power|address ADAPTER"
+Print the adapter power state or BD_ADDR.
+.TP
+.BI "zenctl bt set power " "ADAPTER on|off"
 Power the adapter on or off (via rfkill soft-block).
-.TP
-.B zenctl bt get rfkill\-blocked \-\-adapter NAME
-Print the rfkill soft-block state.
-.TP
-.B zenctl bt set rfkill\-blocked on|off \-\-adapter NAME
-Set the rfkill soft-block state.
-.TP
-.B zenctl bt get address \-\-adapter NAME
-Print the adapter BD_ADDR.
-.TP
-.B zenctl bt enumerate
-List every adapter under /sys/class/bluetooth/.
 .SS "wireless \- Wi-Fi / cfg80211"
 .TP
-.B zenctl wireless get regdomain \-\-phy NAME
-Print the regulatory domain (ISO 3166-1 alpha-2).
+.B zenctl wireless list
+List every phy under /sys/class/ieee80211.
 .TP
-.B zenctl wireless set regdomain CC \-\-phy NAME
-Set the regulatory domain. Requires nl80211 (may return ENOTSUP in v1).
+.BI "zenctl wireless get " "power|regdomain PHY"
+Print the PHY power state or regulatory domain.
 .TP
-.B zenctl wireless get txpower \-\-phy NAME
-Print the TX power in mBm.
-.TP
-.B zenctl wireless set txpower MBM \-\-phy NAME
-Set the TX power. Requires nl80211 (may return ENOTSUP in v1).
-.TP
-.B zenctl wireless get power\-save \-\-phy NAME
-Print whether 802.11 power-save is enabled.
-.TP
-.B zenctl wireless set power\-save on|off \-\-phy NAME
-Set 802.11 power-save. Requires nl80211 (may return ENOTSUP in v1).
-.TP
-.B zenctl wireless get rfkill\-blocked \-\-phy NAME
-Print the rfkill soft-block state.
-.TP
-.B zenctl wireless set rfkill\-blocked on|off \-\-phy NAME
-Set the rfkill soft-block state.
-.TP
-.B zenctl wireless enumerate
-List every phy under /sys/class/ieee80211/.
+.BI "zenctl wireless set power " "PHY on|off"
+Power the PHY on or off (via rfkill soft-block).
 .SS "firmware \- DMI, EFI, ACPI, BIOS settings"
 .TP
-.B zenctl firmware dmi get FIELD
+.BI "zenctl firmware dmi " FIELD
 Print a /sys/class/dmi/id/ FIELD (e.g. bios_vendor, sys_vendor, product_name).
 .TP
-.B zenctl firmware efi enumerate
+.B zenctl firmware dmi \-\-all
+Print every known DMI field.
+.TP
+.B zenctl firmware efi list
 List every EFI variable in /sys/firmware/efi/efivars/.
 .TP
-.B zenctl firmware efi get NAME GUID
+.BI "zenctl firmware efi get " "NAME GUID"
 Print the payload of an EFI variable.
 .TP
-.B zenctl firmware efi set NAME GUID ATTRS DATA
-Write or create an EFI variable. Requires root.
+.BI "zenctl firmware efi set " "NAME GUID FILE"
+Write or create an EFI variable from FILE. Requires root.
 .TP
-.B zenctl firmware efi delete NAME GUID
-Delete an EFI variable. Requires root. Destructive; requires
+.BI "zenctl firmware efi delete " "NAME GUID"
+Delete an EFI variable. Destructive; requires
 .BR \-\-confirm .
 .TP
-.B zenctl firmware acpi list\-tables
+.B zenctl firmware acpi list
 List every ACPI table signature present.
 .TP
-.B zenctl firmware acpi get\-table NAME
+.BI "zenctl firmware acpi get " NAME
 Print the raw bytes of ACPI table NAME (DSDT, SSDT, FACP, ...).
 .TP
-.B zenctl firmware bios setting\-count
-Print the number of firmware-attributes settings.
+.B zenctl firmware bios list
+List every firmware-attributes BIOS setting.
 .TP
-.B zenctl firmware bios get\-setting INDEX
+.BI "zenctl firmware bios get " SETTING
 Print one BIOS setting (name, type, current_value, default_value).
 .TP
-.B zenctl firmware bios set\-setting NAME VALUE [PASSWORD]
-Write a new value to a BIOS setting. Destructive; requires
-.BR \-\-confirm .
+.BI "zenctl firmware bios set " "SETTING VALUE [\-\-password PW]"
+Write a new value to a BIOS setting. Requires root.
 .SS "profile \- save and restore hardware state"
 .TP
-.B zenctl profile save NAME
+.BI "zenctl profile save " NAME
 Snapshot the current live state of every available domain to a TOML
-profile.
+profile. v1 covers CPU (governor, freq min/max), memory (swappiness,
+THP), and per-device storage (scheduler, read-ahead). Other domains
+are skipped.
 .TP
-.B zenctl profile load NAME
+.BI "zenctl profile load " NAME
 Restore a profile. Respects
 .B \-\-dry\-run
 and
@@ -537,19 +398,18 @@ and
 .B zenctl profile list
 List every saved profile, system and user.
 .TP
-.B zenctl profile delete NAME
-Delete a profile. Requires
-.BR \-\-confirm .
+.BI "zenctl profile delete " NAME
+Delete a profile.
 .SS "caps \- capability query"
 .TP
-.B zenctl caps [domain]
-Print, for every key the library knows about (or every key in
+.BI "zenctl caps " [domain]
+Print, for every domain (or every key in
 .IR domain
 when given), whether the capability is
 .BR available ,
-.BR unavailable ,
+.BR readonly ,
 or
-.BR readonly .
+.BR unavailable .
 .SH GLOBAL OPTIONS
 .TP
 .BR \-\-json
@@ -573,13 +433,13 @@ touching hardware. Available everywhere, including
 .BR \-\-confirm
 Skip the interactive Y/N prompt for destructive writes. Required (or
 the prompt must be answered) for operations like disabling CPU cores,
-toggling IOMMU groups, writing EFI variables, modifying ACPI S-states,
-and disabling USB devices.
+disabling SMT, entering a sleep state, deleting EFI variables, and
+deauthorizing USB devices.
 .TP
-.BR \-\-help
+.BR \-\-help ,\ \ -h
 Print usage and exit 0.
 .TP
-.BR \-\-version
+.BR \-\-version ,\ \ -V
 Print the
 .B zenctl
 and
@@ -599,15 +459,11 @@ or an interactive Y/N prompt. Destructive operations include:
 .IP \(bu 3
 disabling CPU cores or SMT
 .IP \(bu 3
-changing IOMMU groups or D3cold policy
+entering an ACPI sleep state
 .IP \(bu 3
-writing or deleting EFI variables
+deleting EFI variables
 .IP \(bu 3
-modifying ACPI S-states or entering a sleep state
-.IP \(bu 3
-deauthorizing or resetting USB devices
-.IP \(bu 3
-writing BIOS settings
+deauthorizing USB devices
 .SS "Dry run"
 .B \-\-dry\-run
 works on every write subcommand and on
@@ -628,8 +484,8 @@ System profiles live in
 .IR /etc/zenctl/profiles/ ,
 user profiles in
 .IR ~/.config/zenctl/profiles/ .
-User profiles are limited to read-only domains; only the system path
-can write to privileged controls.
+On save the system path is used when running as root, else the user
+path. On load the user path is tried first, then the system path.
 .PP
 Profile format (abbreviated):
 .PP
@@ -661,6 +517,36 @@ replays the profile, applying the same
 and
 .B \-\-confirm
 rules as direct writes.
+.SH "FREQUENCY UNITS"
+Frequency arguments to
+.B "cpu set freq\-min"
+and
+.B "cpu set freq\-max"
+accept plain Hz or a unit suffix:
+.RS
+.IP \(bu 3
+.I 3600000
+- plain Hz
+.IP \(bu 3
+.I 3600MHz
+or
+.I 3600M
+- megahertz
+.IP \(bu 3
+.I 3.6GHz
+or
+.I 3.6G
+- gigahertz
+.IP \(bu 3
+.I 3600kHz
+or
+.I 3600K
+- kilohertz
+.RE
+.IP
+Trailing "Hz" after a unit (e.g.
+.IR 3.6GHz )
+is tolerated. Internally every value is converted to Hz.
 .SH EXAMPLES
 .PP
 Read the active governor on CPU 0:
@@ -679,11 +565,11 @@ zenctl thermal get temp --zone thermal_zone0
 .EE
 .in
 .PP
-Read the RX ring size on eth0:
+Read the RX and TX ring sizes on eth0:
 .PP
 .in +4
 .EX
-zenctl net get ring-rx --iface eth0
+zenctl net get ring --iface eth0
 .EE
 .in
 .PP
@@ -703,11 +589,11 @@ sudo zenctl storage set scheduler mq-deadline --dev sda
 .EE
 .in
 .PP
-Cap the GPU power limit on card0:
+Set the GPU fan PWM on card0 to 128:
 .PP
 .in +4
 .EX
-sudo zenctl gpu set fan-pwm 128 --dev /dev/dri/card0
+sudo zenctl gpu set fan 128 --card 0
 .EE
 .in
 .PP
@@ -715,11 +601,11 @@ Dry-run a max-frequency change across all CPUs (writes nothing):
 .PP
 .in +4
 .EX
-zenctl cpu set freq-max 4000000 --cpu all --dry-run
+zenctl cpu set freq-max 3.6GHz --cpu all --dry-run
 .EE
 .in
 .PP
-Dump every CPU value as JSON:
+Dump every CPU capability as JSON:
 .PP
 .in +4
 .EX
@@ -749,7 +635,7 @@ zenctl profile list --json
 System profiles, written by root.
 .TP
 .I ~/.config/zenctl/profiles/
-User profiles. Limited to read-only domains.
+User profiles.
 .TP
 .I /usr/local/bin/zenctl
 The CLI binary.
