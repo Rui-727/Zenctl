@@ -59,7 +59,7 @@ const char *zenctl_strerror(int code)
 /* ── Context ─────────────────────────────────────────────────────── */
 
 struct zenctl_ctx {
-    int placeholder; /* capability cache will go here */
+    int cap_cache_init;  /* set to 1 after first capability probe */
 };
 
 zenctl_ctx_t *zenctl_ctx_new(zenctl_err_t *err)

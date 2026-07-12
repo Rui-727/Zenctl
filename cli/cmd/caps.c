@@ -30,14 +30,14 @@ static const struct cap_entry cap_table[] = {
     { "storage",  "available" },
     { "net",      "available" },
     { "pcie",     "available" },
-    { "gpu",      "stub" },
-    { "thermal",  "stub" },
-    { "power",    "stub" },
-    { "usb",      "stub" },
-    { "bt",       "stub" },
-    { "wireless", "stub" },
-    { "firmware", "stub" },
-    { "profile",  "stub" },
+    { "gpu",      "available" },
+    { "thermal",  "available" },
+    { "power",    "available" },
+    { "usb",      "available" },
+    { "bt",       "available" },
+    { "wireless", "available" },
+    { "firmware", "available" },
+    { "profile",  "available" },
     { NULL, NULL }
 };
 

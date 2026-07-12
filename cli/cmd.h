@@ -22,8 +22,6 @@ int cmd_mem(int argc, char **argv, bool json, bool dry_run, bool confirm);
 int cmd_storage(int argc, char **argv, bool json, bool dry_run, bool confirm);
 int cmd_net(int argc, char **argv, bool json, bool dry_run, bool confirm);
 int cmd_pcie(int argc, char **argv, bool json, bool dry_run, bool confirm);
-
-/* Stubs - print "not yet implemented" and return 1 */
 int cmd_gpu(int argc, char **argv, bool json, bool dry_run, bool confirm);
 int cmd_thermal(int argc, char **argv, bool json, bool dry_run, bool confirm);
 int cmd_power(int argc, char **argv, bool json, bool dry_run, bool confirm);
